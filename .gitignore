@@ -1,0 +1,45 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+$(APP_NAME)
+
+# Test binary
+*.test
+
+# Coverage
+coverage.out
+coverage.html
+
+# Build artifacts
+dist/
+build/
+bin/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.log
+
+# Config (may contain secrets)
+configs/config.yaml
+
+# OS
+Thumbs.db
+
+project.md
+steps.md
+.history
+.qwen

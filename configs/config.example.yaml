@@ -1,0 +1,34 @@
+# Пример конфигурации Telegram News Digest Bot
+# Скопируйте в config.yaml и заполните значения
+
+bot:
+  token: "YOUR_BOT_TOKEN_HERE"  # Получите от @BotFather
+  parse_mode: "HTML"            # HTML или MarkdownV2
+  owner_chat_id: 0              # Ваш Telegram chat_id для команд администратора
+
+rss:
+  feeds:
+    - "https://rsshub.app/telegram/channel/durov"
+    - "https://rsshub.app/telegram/channel/meduzanews"
+  max_items_per_feed: 50        # Макс. элементов на одну ленту
+  fetch_timeout: 15s            # Таймаут запроса RSS
+  cache_ttl: 24h                # TTL кэша дедупликации
+
+llm:
+  endpoint: "http://127.0.0.1:8080"
+  model: "llama-3-8b-instruct-Q5_K_M"
+  temperature: 0.3
+  max_tokens: 2000
+  context_window: 8192
+  timeout: 60s
+
+schedule:
+  cron: "0 9 * * *"             # Ежедневно в 09:00
+  timezone: "Europe/Moscow"
+
+app:
+  db_path: "./data/bot.db"
+  log_level: "info"             # debug, info, warn, error
+  retry_max: 3
+  retry_backoff: 2s
+  digest_log_path: "./data/bot.log"

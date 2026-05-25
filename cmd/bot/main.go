@@ -1,0 +1,290 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/nyver/tg-news-digest/internal/bot"
+	"github.com/nyver/tg-news-digest/internal/config"
+	"github.com/nyver/tg-news-digest/internal/formatter"
+	"github.com/nyver/tg-news-digest/internal/healthcheck"
+	"github.com/nyver/tg-news-digest/internal/llm"
+	"github.com/nyver/tg-news-digest/internal/models"
+	"github.com/nyver/tg-news-digest/internal/rss"
+	"github.com/nyver/tg-news-digest/internal/scheduler"
+	"github.com/nyver/tg-news-digest/internal/storage"
+)
+
+func main() {
+	cfg := config.MustLoad()
+
+	logger := setupLogger(cfg.App)
+	logger.Info("bot: starting",
+		slog.String("db_path", cfg.App.DBPath),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Initialize storage
+	store, err := storage.New(ctx, cfg.App.DBPath)
+	if err != nil {
+		logger.Error("failed to initialize storage", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	if err := store.DB().Ping(); err != nil {
+		logger.Error("database ping failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	// Initialize formatter
+	fmttr := formatter.New(formatter.ParseMode(cfg.Bot.ParseMode))
+
+	// Initialize LLM client
+	llmClient := llm.New(cfg.LLM, logger)
+
+	// Initialize RSS fetcher
+	rssFetcher := rss.New(cfg.RSS, store)
+
+	// Pipeline: fetch RSS → rank with LLM → save → return ranked items
+	runPipeline := buildPipeline(logger, store, rssFetcher, llmClient)
+
+	// Initialize bot — use a pointer so the broadcastFn can reference it
+	var botRef *bot.Bot
+	botRef, err = bot.New(cfg.Bot, fmttr, store, func(ctx context.Context) error {
+		_, ranked, err := runPipeline(ctx)
+		if err != nil {
+			return err
+		}
+		if len(ranked) == 0 {
+			logger.Info("pipeline: no items to broadcast")
+			return nil
+		}
+		return botRef.Broadcast(ctx, ranked, time.Now())
+	}, logger)
+	if err != nil {
+		logger.Error("failed to initialize bot", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	b := botRef
+
+	// Initialize healthcheck
+	hc := healthcheck.New(*cfg, store, logger).WithPort(cfg.App.HealthPort)
+	_, healthShutdown := hc.StartHTTPServer(ctx)
+	defer healthShutdown()
+	logger.Info("healthcheck: enabled", slog.Int("port", cfg.App.HealthPort))
+
+	// Initialize scheduler
+	sched, err := scheduler.New(cfg.Schedule, logger)
+	if err != nil {
+		logger.Error("failed to initialize scheduler", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	// Schedule daily digest: same broadcast function
+	if err := sched.AddJob(cfg.Schedule.Cron, func(ctx context.Context) error {
+		_, ranked, err := runPipeline(ctx)
+		if err != nil {
+			return err
+		}
+		if len(ranked) == 0 {
+			logger.Info("pipeline: no items to broadcast")
+			return nil
+		}
+		return b.Broadcast(ctx, ranked, time.Now())
+	}); err != nil {
+		logger.Error("failed to add digest job", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	sched.Start()
+
+	// Start bot polling
+	logger.Info("bot: starting polling")
+	if err := b.Start(ctx); err != nil {
+		logger.Error("bot: polling error", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	// Wait for shutdown signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	logger.Info("bot: shutdown signal received, draining...")
+	cancel()
+	sched.Stop()
+
+	time.Sleep(2 * time.Second)
+	logger.Info("bot: stopped")
+}
+
+// buildPipeline creates the digest pipeline: fetch RSS → rank with LLM → save.
+func buildPipeline(
+	logger *slog.Logger,
+	store *storage.Store,
+	rssFetcher *rss.Fetcher,
+	llmClient *llm.Client,
+) func(ctx context.Context) (*models.DigestRun, []models.RankedNewsItem, error) {
+	return func(ctx context.Context) (*models.DigestRun, []models.RankedNewsItem, error) {
+		logger.Info("pipeline: starting digest run")
+
+		// 1. Fetch RSS
+		fetchResult, err := rssFetcher.FetchAll(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("pipeline: fetch: %w", err)
+		}
+
+		logger.Info("pipeline: fetch complete",
+			slog.Int("items", len(fetchResult.Items)),
+			slog.Int("feeds_ok", fetchResult.FeedsOK),
+			slog.Int("feeds_err", fetchResult.FeedsErr),
+		)
+
+		if len(fetchResult.Items) == 0 {
+			logger.Info("pipeline: no new items")
+			run := &models.DigestRun{
+				RunAt:     time.Now(),
+				Status:    "success",
+				ItemCount: 0,
+				LLMUsed:   false,
+			}
+			if err := store.SaveDigestRun(ctx, *run); err != nil {
+				logger.Warn("pipeline: save run record failed", slog.String("error", err.Error()))
+			}
+			return run, nil, nil
+		}
+
+		// 2. Save items
+		if err := rssFetcher.SaveAndCleanup(ctx, fetchResult.Items); err != nil {
+			logger.Warn("pipeline: save items failed", slog.String("error", err.Error()))
+		}
+
+		// 3. Rank with LLM
+		ranked, llmUsed, err := llmClient.RankWithLLM(ctx, fetchResult.Items)
+		if err != nil {
+			logger.Error("pipeline: rank failed", slog.String("error", err.Error()))
+			run := &models.DigestRun{
+				RunAt:     time.Now(),
+				Status:    "failed",
+				ItemCount: 0,
+				LLMUsed:   false,
+				ErrorMsg:  err.Error(),
+			}
+			store.SaveDigestRun(ctx, *run)
+			return run, nil, err
+		}
+
+		runStatus := "success"
+		if !llmUsed {
+			runStatus = "fallback"
+		}
+
+		logger.Info("pipeline: ranking complete",
+			slog.Int("ranked_items", len(ranked)),
+			slog.Bool("llm_used", llmUsed),
+		)
+
+		// 4. Save digest run record
+		run := &models.DigestRun{
+			RunAt:     time.Now(),
+			Status:    runStatus,
+			ItemCount: len(ranked),
+			LLMUsed:   llmUsed,
+		}
+		if err := store.SaveDigestRun(ctx, *run); err != nil {
+			logger.Warn("pipeline: save run record failed", slog.String("error", err.Error()))
+		}
+
+		return run, ranked, nil
+	}
+}
+
+// multiHandler delegates logging to multiple underlying handlers.
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+func (m *multiHandler) Enabled(_ context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(context.Background(), level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *multiHandler) Handle(_ context.Context, r slog.Record) error {
+	for _, h := range m.handlers {
+		if err := h.Handle(context.Background(), r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	nested := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		nested[i] = h.WithAttrs(attrs)
+	}
+	return &multiHandler{handlers: nested}
+}
+
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	nested := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		nested[i] = h.WithGroup(name)
+	}
+	return &multiHandler{handlers: nested}
+}
+
+// setupLogger configures slog with both file (JSON) and console (text) output.
+func setupLogger(cfg config.AppConfig) *slog.Logger {
+	opts := &slog.HandlerOptions{
+		Level:     parseLogLevel(cfg.LogLevel),
+		AddSource: true,
+	}
+
+	var handlers []slog.Handler
+
+	if cfg.DigestLogPath != "" {
+		f, err := os.OpenFile(cfg.DigestLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to open log file: %v\n", err)
+		} else {
+			handlers = append(handlers, slog.NewJSONHandler(f, opts))
+		}
+	}
+
+	handlers = append(handlers, slog.NewTextHandler(os.Stdout, opts))
+
+	if len(handlers) == 0 {
+		return slog.New(slog.NewTextHandler(os.Stdout, opts))
+	}
+
+	return slog.New(&multiHandler{handlers: handlers})
+}
+
+// parseLogLevel converts a string to a slog.Level.
+func parseLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
