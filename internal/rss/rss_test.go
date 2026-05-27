@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,13 +23,13 @@ const testFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
       <title>News One</title>
       <description>Description of news one</description>
       <link>https://example.com/news-one</link>
-      <pubDate>Mon, 24 May 2026 10:00:00 +0000</pubDate>
+      <pubDate>Wed, 27 May 2026 10:00:00 +0000</pubDate>
     </item>
     <item>
       <title>News Two</title>
       <description>Description of news two</description>
       <link>https://example.com/news-two</link>
-      <pubDate>Mon, 24 May 2026 08:00:00 +0000</pubDate>
+      <pubDate>Wed, 27 May 2026 08:00:00 +0000</pubDate>
     </item>
     <item>
       <title>Old News</title>
@@ -161,4 +163,53 @@ func TestFetchAll_DedupViaStorage(t *testing.T) {
 	result2, err := f.FetchAll(ctx)
 	require.NoError(t, err)
 	assert.Len(t, result2.Items, 0) // All deduped
+}
+
+// TestFetchLocalFile verifies that a local RSS XML file can be loaded.
+func TestFetchLocalFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	localPath := filepath.Join(tmpDir, "feed.xml")
+	err := os.WriteFile(localPath, []byte(testFeedXML), 0644)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	store, err := storage.New(ctx, ":memory:")
+	require.NoError(t, err)
+	defer store.Close()
+
+	cfg := config.RSSConfig{
+		Feeds:           []string{localPath},
+		MaxItemsPerFeed: 50,
+		FetchTimeout:    10 * time.Second,
+		CacheTTL:        24 * time.Hour,
+	}
+	f := New(cfg, store)
+
+	items, err := f.fetchSingle(ctx, localPath)
+	require.NoError(t, err)
+	assert.Len(t, items, 2) // Old news filtered out
+
+	// Check that FeedURL is set to the local path
+	for _, item := range items {
+		assert.Equal(t, localPath, item.FeedURL)
+	}
+}
+
+// TestFetchLocalFile_NotFound verifies error handling for missing files.
+func TestFetchLocalFile_NotFound(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, ":memory:")
+	require.NoError(t, err)
+	defer store.Close()
+
+	cfg := config.RSSConfig{
+		Feeds:           []string{"/no/such/path/feed.xml"},
+		MaxItemsPerFeed: 50,
+		FetchTimeout:    10 * time.Second,
+		CacheTTL:        24 * time.Hour,
+	}
+	f := New(cfg, store)
+
+	_, err = f.fetchSingle(ctx, "/no/such/path/feed.xml")
+	assert.Error(t, err)
 }

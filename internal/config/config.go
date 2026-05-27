@@ -18,10 +18,18 @@ type Config struct {
 	App      AppConfig      `mapstructure:"app"`
 }
 
+type MTProxyConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	Host    string `mapstructure:"host"`
+	Port    int    `mapstructure:"port"`
+	Secret  string `mapstructure:"secret"` // Base64-encoded proxy secret (optional)
+}
+
 type BotConfig struct {
-	Token       string `mapstructure:"token"`
-	ParseMode   string `mapstructure:"parse_mode"` // HTML or MarkdownV2
-	OwnerChatID int64  `mapstructure:"owner_chat_id"`
+	Token       string        `mapstructure:"token"`
+	ParseMode   string        `mapstructure:"parse_mode"` // HTML or MarkdownV2
+	OwnerChatID int64         `mapstructure:"owner_chat_id"`
+	MTProxy     MTProxyConfig `mapstructure:"mtproxy"`
 }
 
 type RSSConfig struct {

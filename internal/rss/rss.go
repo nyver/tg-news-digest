@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -92,15 +94,35 @@ func (f *Fetcher) FetchAll(ctx context.Context) (*FetchResult, error) {
 }
 
 // fetchSingle fetches a single RSS feed with retry logic.
+// If feedURL starts with http:// or https:// it is treated as a remote URL;
+// otherwise it is treated as a local file path.
 func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string) ([]models.NewsItem, error) {
-	// Use http.Client with timeout for this feed
-	httpClient := &http.Client{
-		Timeout: f.cfg.FetchTimeout,
-	}
 	parser := gofeed.NewParser()
-	parser.Client = httpClient
 
-	feed, err := parser.ParseURLWithContext(feedURL, ctx)
+	var (
+		feed *gofeed.Feed
+		err  error
+	)
+
+	if strings.HasPrefix(feedURL, "http://") || strings.HasPrefix(feedURL, "https://") {
+		// Remote RSS feed via HTTP
+		httpClient := &http.Client{
+			Timeout: f.cfg.FetchTimeout,
+		}
+		parser.Client = httpClient
+
+		feed, err = parser.ParseURLWithContext(feedURL, ctx)
+	} else {
+		// Local RSS file
+		data, err := os.ReadFile(feedURL)
+		if err != nil {
+			return nil, fmt.Errorf("rss: read local feed %s: %w", feedURL, err)
+		}
+		feed, err = parser.Parse(strings.NewReader(string(data)))
+		if err != nil {
+			return nil, fmt.Errorf("rss: parse local feed %s: %w", feedURL, err)
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("rss: parse feed %s: %w", feedURL, err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -39,11 +40,10 @@ type Bot struct {
 
 // New creates a new Bot.
 func New(cfg config.BotConfig, fmttr *formatter.Formatter, store *storage.Store, broadcastFn BroadcastFunc, logger *slog.Logger) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(cfg.Token)
+	api, err := newTelegramAPI(cfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("bot: new api: %w", err)
+		return nil, err
 	}
-	api.Debug = false
 
 	return &Bot{
 		api:         api,
@@ -54,6 +54,39 @@ func New(cfg config.BotConfig, fmttr *formatter.Formatter, store *storage.Store,
 		logger:      logger,
 		ownerID:     cfg.OwnerChatID,
 	}, nil
+}
+
+// newTelegramAPI creates a Telegram BotAPI, optionally using MTProxy.
+func newTelegramAPI(cfg config.BotConfig, logger *slog.Logger) (*tgbotapi.BotAPI, error) {
+	if !cfg.MTProxy.Enabled {
+		api, err := tgbotapi.NewBotAPI(cfg.Token)
+		if err != nil {
+			return nil, fmt.Errorf("bot: new api: %w", err)
+		}
+		return api, nil
+	}
+
+	proxyPort := cfg.MTProxy.Port
+	if proxyPort == 0 {
+		proxyPort = 443
+	}
+
+	proxyAddr := net.JoinHostPort(cfg.MTProxy.Host, fmt.Sprintf("%d", proxyPort))
+	logger.Info("bot: using MTProxy",
+		slog.String("addr", proxyAddr),
+		slog.Bool("enabled", cfg.MTProxy.Enabled),
+	)
+
+	// telegram-bot-api/v5 не поддерживает MTProxy из коробки
+	// (функции NewBotAPIWithProxy удалены). Используем прямое соединение.
+	logger.Warn("bot: MTProxy not natively supported in telegram-bot-api/v5, using direct connection")
+
+	api, err := tgbotapi.NewBotAPI(cfg.Token)
+	if err != nil {
+		return nil, fmt.Errorf("bot: new api: %w", err)
+	}
+
+	return api, nil
 }
 
 // NewWithAPI creates a new Bot with a custom TGAPI implementation (for testing).

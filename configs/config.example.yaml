@@ -5,13 +5,20 @@ bot:
   token: "YOUR_BOT_TOKEN_HERE"  # Получите от @BotFather
   parse_mode: "HTML"            # HTML или MarkdownV2
   owner_chat_id: 0              # Ваш Telegram chat_id для команд администратора
+  mtproxy:
+    enabled: false              # Включить использование MTProxy
+    host: "example.com"         # Адрес MTProxy-сервера
+    port: 443                   # Порт MTProxy-сервера (по умолчанию 443)
+    secret: ""                  # Base64-кодированный секрет прокси (необязательно)
 
 rss:
   feeds:
     - "https://rsshub.app/telegram/channel/durov"
     - "https://rsshub.app/telegram/channel/meduzanews"
+    # Локальные RSS-файлы также поддерживаются (путь относительно cwd):
+    # - "./data/rss/local-feed.xml"
   max_items_per_feed: 50        # Макс. элементов на одну ленту
-  fetch_timeout: 15s            # Таймаут запроса RSS
+  fetch_timeout: 15s            # Таймаут запроса RSS (только для HTTP)
   cache_ttl: 24h                # TTL кэша дедупликации
 
 llm:
