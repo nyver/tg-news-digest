@@ -14,7 +14,6 @@ Telegram-бот для ежедневного новостного дайдже�
 - [Команды бота](#-команды-бота)
 - [Healthcheck API](#healthcheck-api)
 - [Разработка](#-разработка)
-- [Тесты](#-тесты)
 - [Обработка ошибок](#-обработка-ошибок)
 - [FAQ](#-faq)
 
@@ -46,9 +45,7 @@ Telegram-бот для ежедневного новостного дайдже�
 ├── configs/
 │   └── config.example.yaml   # Пример конфигурации
 ├── data/                      # БД и логи
-├── tests/                     # Интеграционные тесты
-├── Makefile                   # Build automation
-└── build.bat                  # Скрипт сборки (Windows)
+└── tests/                     # Юнит-тесты
 ```
 
 ## 🚀 Быстрый старт
@@ -74,7 +71,7 @@ cp configs/config.example.yaml configs/config.yaml
 build.bat
 .\bot.exe --config configs/config.yaml
 
-# Или через Makefile (Linux/macOS)
+# Или через Makefile (Linux/macOS/Windows с GnuWin32)
 make build
 ./bin/tg-news-digest --config configs/config.yaml
 ```
@@ -178,7 +175,6 @@ make build              # Собрать бинарник
 make run                # Запустить в dev-режиме
 make test               # Запустить тесты с race detector
 make coverage           # Отчёт покрытия (coverage.html)
-make lint               # Запустить линтер (требуется golangci-lint)
 make fmt                # Форматирование кода
 make clean              # Очистка артефактов
 ```
@@ -189,15 +185,13 @@ make clean              # Очистка артефактов
 build.bat
 ```
 
-## 🧪 Тесты
+### Тесты
 
 ```bash
-# Все тесты
 make test
+```
 
-# С покрытием
-make coverage
-
+```bash
 # Конкретный пакет
 go test ./internal/bot/ -v -count=1
 ```
