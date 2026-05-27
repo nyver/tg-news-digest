@@ -8,14 +8,10 @@ Telegram-бот для ежедневного новостного дайдже�
 ## 📋 Содержание
 
 - [Возможности](#-возможности)
-- [Архитектура](#-архитектура)
+- [Структура проекта](#-структура-проекта)
 - [Быстрый старт](#-быстрый-старт)
 - [Конфигурация](#-конфигурация)
 - [Команды бота](#-команды-бота)
-- [Развёртывание](#-развёртывание)
-  - [Local development](#local-development)
-  - [Docker](#docker)
-  - [Systemd](#systemd)
 - [Healthcheck API](#healthcheck-api)
 - [Разработка](#-разработка)
 - [Тесты](#-тесты)
@@ -31,23 +27,28 @@ Telegram-бот для ежедневного новостного дайдже�
 - **Отказоустойчивость** — retry, fallback на raw top-10, graceful shutdown
 - **Healthcheck** — HTTP endpoint для мониторинга всех компонентов
 
-## 🏗 Архитектура
+## 🏗 Структура проекта
 
 ```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  Scheduler   │───▶│  RSS Fetcher │───▶│   LLM Client │
-│  (cron)      │    │  (parallel)  │    │ (llama.cpp)  │
-└──────────────┘    └──────┬───────┘    └──────┬───────┘
-                           │                   │
-                    ┌──────▼───────┐    ┌──────▼───────┐
-                    │  Dedup/Filter│───▶│  Formatter   │
-                    │  SQLite      │    │  HTML/MD     │
-                    └──────────────┘    └──────┬───────┘
-                                               │
-                                      ┌────────▼────────┐
-                                      │ Telegram Bot    │
-                                      │  (polling)      │
-                                      └─────────────────┘
+├── cmd/bot/main.go           # Точка входа
+├── internal/
+│   ├── bot/                  # Telegram Bot логика
+│   ├── config/               # Загрузка конфигурации
+│   ├── formatter/            # Форматирование сообщений
+│   ├── healthcheck/          # Health HTTP endpoint
+│   ├── llm/                  # LLM-клиент (llama.cpp)
+│   ├── models/               # Доменные модели
+│   ├── rss/                  # RSS-фетчер
+│   ├── scheduler/            # Cron-планировщик
+│   ├── storage/              # SQLite хранилище
+│   ├── tgbot/                # Обёртка над Telegram API
+│   └── version/              # Версия приложения
+├── configs/
+│   └── config.example.yaml   # Пример конфигурации
+├── data/                      # БД и логи
+├── tests/                     # Интеграционные тесты
+├── Makefile                   # Build automation
+└── build.bat                  # Скрипт сборки (Windows)
 ```
 
 ## 🚀 Быстрый старт
@@ -69,9 +70,13 @@ cd tg-news-digest
 cp configs/config.example.yaml configs/config.yaml
 # Отредактируйте configs/config.yaml — укажите токен бота и RSS-ленты
 
-# Собрать и запустить
-go build -o ./tg-news-digest.exe ./cmd/bot
-./tg-news-digest.exe --config configs/config.yaml
+# Собрать и запустить (Windows)
+build.bat
+.\bot.exe --config configs/config.yaml
+
+# Или через Makefile (Linux/macOS)
+make build
+./bin/tg-news-digest --config configs/config.yaml
 ```
 
 ## ⚙️ Конфигурация
@@ -83,6 +88,11 @@ bot:
   token: "YOUR_BOT_TOKEN_HERE"     # Токен от @BotFather
   parse_mode: "HTML"               # HTML или MarkdownV2
   owner_chat_id: 0                 # Chat ID для admin-команд
+  mtproxy:
+    enabled: false                 # Включить использование MTProxy
+    host: "example.com"            # Адрес MTProxy-сервера
+    port: 443                      # Порт MTProxy-сервера (по умолчанию 443)
+    secret: ""                     # Base64-кодированный секрет прокси
 
 rss:
   feeds:
@@ -107,7 +117,8 @@ schedule:
 app:
   db_path: "./data/bot.db"
   log_level: "info"
-  health_port: 9100
+  retry_max: 3
+  retry_backoff: 2s
   digest_log_path: "./data/bot.log"
 ```
 
@@ -129,45 +140,6 @@ export TG_NEWS_LLM_ENDPOINT="http://localhost:8080"
 | `/unsubscribe` | Отписка |
 | `/digest` | Принудительная генерация дайджеста (только владелец) |
 | `/status` | Статус последнего запуска |
-
-## 📦 Развёртывание
-
-### Local development
-
-```bash
-make run                    # Запустить в режиме разработки
-make build                  # Собрать бинарник
-./bin/tg-news-digest \
-    --config configs/config.yaml
-```
-
-### Docker
-
-```bash
-# Собрать и запустить
-make docker-run
-
-# Или через docker-compose
-make docker-compose-up
-
-# С переменными окружения
-TG_NEWS_BOT_TOKEN="123456:ABC..." docker-compose up -d
-```
-
-### Systemd
-
-```bash
-# Установка через Makefile
-make build
-sudo cp bin/tg-news-digest /usr/local/bin/
-sudo cp tg-news-digest.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now tg-news-digest
-
-# Проверка статуса
-sudo systemctl status tg-news-digest
-journalctl -u tg-news-digest -f
-```
 
 ## 🩺 Healthcheck API
 
@@ -206,38 +178,15 @@ make build              # Собрать бинарник
 make run                # Запустить в dev-режиме
 make test               # Запустить тесты с race detector
 make coverage           # Отчёт покрытия (coverage.html)
-make lint               # Запустить линтер
-make lint-fix           # Линтер с авто-фиксами
+make lint               # Запустить линтер (требуется golangci-lint)
 make fmt                # Форматирование кода
 make clean              # Очистка артефактов
-make docker             # Собрать Docker-образ
-make install-sys        # Установить systemd service
 ```
 
-### Структура проекта
+### Сборка (Windows)
 
-```
-├── cmd/bot/main.go           # Точка входа
-├── internal/
-│   ├── bot/                  # Telegram Bot API
-│   ├── config/               # Загрузка конфигурации
-│   ├── formatter/            # Форматирование сообщений
-│   ├── healthcheck/          # Health HTTP endpoint
-│   ├── llm/                  # LLM-клиент (llama.cpp)
-│   ├── models/               # Доменные модели
-│   ├── rss/                  # RSS-фетчер
-│   ├── scheduler/            # Cron-планировщик
-│   └── storage/              # SQLite хранилище
-├── configs/
-│   ├── config.example.yaml   # Пример конфигурации
-│   └── config.yaml           # Активная конфигурация
-├── data/                      # БД и логи
-├── tests/                     # Интеграционные тесты
-├── Dockerfile                 # Multi-stage Dockerfile
-├── docker-compose.yml         # Docker Compose
-├── tg-news-digest.service     # Systemd unit
-├── Makefile                   # Build automation
-└── .golangci.yml              # Linter config
+```bash
+build.bat
 ```
 
 ## 🧪 Тесты
@@ -265,20 +214,20 @@ go test ./internal/bot/ -v -count=1
 
 ## ❓ FAQ
 
-**Q: Где взять RSS-ленты для Telegram-каналов?**  
+**Q: Где взять RSS-ленты для Telegram-каналов?**
 A: Используйте RSSHub (`rsshub.app/telegram/channel/<channel_name>`) или альтернативные мосты: `tg2rss`, публичные списки (`t.me/s/<channel_name>`).
 
-**Q: Что если llama.cpp недоступен?**  
+**Q: Что если llama.cpp недоступен?**
 A: Бот автоматически переключится на fallback — топ-10 по дате публикации с пометкой `⚠️ AI недоступен`.
 
-**Q: Как часто выходит дайджест?**  
+**Q: Как часто выходит дайджест?**
 A: По расписанию cron — по умолчанию `0 9 * * *` (ежедневно в 09:00 по Moscow Time). Можно изменить в конфиге или через `/digest` (owner).
 
-**Q: Как бэкапить базу данных?**  
+**Q: Как бэкапить базу данных?**
 A: SQLite в WAL-режиме. Используйте `sqlite3 .dump` или просто копию файла `data/bot.db`.
 
-**Q: Можно ли использовать с прокси?**  
-A: Да, настройте переменные окружения `HTTP_PROXY` / `HTTPS_PROXY`.
+**Q: Можно ли использовать с прокси?**
+A: Да, настройте переменные окружения `HTTP_PROXY` / `HTTPS_PROXY`, или используйте MTProxy в конфиге бота.
 
 ---
 
