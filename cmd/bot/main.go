@@ -106,6 +106,34 @@ func main() {
 
 	sched.Start()
 
+	// Periodic cleanup of old digest run records (daily, older than 7 days)
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		// Run cleanup on startup
+		n, err := store.CleanupOldDigestRuns(ctx, 7*24*time.Hour)
+		if err != nil {
+			logger.Warn("cleanup: old digest runs", slog.String("error", err.Error()))
+		} else if n > 0 {
+			logger.Info("cleanup: removed old digest runs", slog.Int("count", n))
+		}
+
+		for {
+			select {
+			case <-ticker.C:
+				n, err := store.CleanupOldDigestRuns(ctx, 7*24*time.Hour)
+				if err != nil {
+					logger.Warn("cleanup: old digest runs", slog.String("error", err.Error()))
+				} else if n > 0 {
+					logger.Info("cleanup: removed old digest runs", slog.Int("count", n))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	// Start bot polling
 	logger.Info("bot: starting polling")
 	if err := b.Start(ctx); err != nil {

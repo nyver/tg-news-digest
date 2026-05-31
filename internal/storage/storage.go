@@ -261,3 +261,19 @@ func (s *Store) GetLastRun(ctx context.Context) (*models.DigestRun, error) {
 	}
 	return run, err
 }
+
+// CleanupOldDigestRuns removes digest run records older than the given duration.
+func (s *Store) CleanupOldDigestRuns(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := time.Now().Add(-olderThan).UTC().Format("2006-01-02 15:04:05")
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM digest_runs WHERE run_at < ?`, cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, raErr := res.RowsAffected()
+	if raErr != nil {
+		return 0, raErr
+	}
+	return int(n), nil
+}
