@@ -10,7 +10,7 @@ services:
     ports:
       - "9100:9100"
     volumes:
-      - ./configs/config.yaml:/app/config.example.yaml:ro
+      - ./configs/config.yaml:/app/config.yaml:ro
       - bot-data:/app/data
     environment:
       - TZ=Europe/Moscow
