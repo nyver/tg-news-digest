@@ -16,20 +16,22 @@ import (
 	"github.com/nyver/tg-news-digest/internal/storage"
 )
 
+const openrouterName = "tg-news-digest-bot"
+
 // Check represents the health status of a single component.
 type Check struct {
-	Status    string `json:"status"` // "ok", "warn", "error"
-	Duration  string `json:"duration,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Status   string `json:"status"` // "ok", "warn", "error"
+	Duration string `json:"duration,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 // HealthResponse is the full health check payload.
 type HealthResponse struct {
-	Status   string            `json:"status"` // "healthy", "degraded", "unhealthy"
-	uptime   time.Duration     `json:"-"`
-	Started  string            `json:"started_at"`
-	Duration string            `json:"duration"`
-	Checks   map[string]Check  `json:"checks"`
+	Status   string           `json:"status"` // "healthy", "degraded", "unhealthy"
+	uptime   time.Duration    `json:"-"`
+	Started  string           `json:"started_at"`
+	Duration string           `json:"duration"`
+	Checks   map[string]Check `json:"checks"`
 }
 
 // Checker validates the health of all service components.
@@ -149,31 +151,58 @@ func (hc *Checker) checkDatabase(ctx context.Context) Check {
 func (hc *Checker) checkLLM(ctx context.Context) Check {
 	start := time.Now()
 
-	// Quick ping: try to reach the llama.cpp endpoint with a minimal request
-	var c Check
-	c.Duration = time.Since(start).String()
-
-	// If no endpoint configured, skip
-	if hc.llmCfg.Endpoint == "" {
-		c.Status = "warn"
-		c.Message = "LLM endpoint not configured"
-		return c
+	// Determine provider and endpoint
+	provider := hc.llmCfg.Provider
+	if provider == "" {
+		provider = "llama-cpp"
 	}
 
-	// Send a minimal chat completion request
-	reqBody := map[string]interface{}{
-		"model":     "auto",
-		"messages":  []map[string]string{{"role": "user", "content": "hi"}},
-		"max_tokens": 5,
-		"stream":     false,
+	var reqBody map[string]interface{}
+	var headers map[string]string
+
+	switch provider {
+	case "openrouter":
+		headers = map[string]string{
+			"Authorization": "Bearer " + hc.llmCfg.APIKey,
+			"HTTP-Referer":  openrouterName,
+			"Content-Type":  "application/json",
+		}
+		reqBody = map[string]interface{}{
+			"model":      "auto",
+			"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+			"max_tokens": 5,
+			"stream":     false,
+		}
+	default:
+		if hc.llmCfg.Endpoint == "" {
+			return Check{
+				Status:   "warn",
+				Message:  "LLM endpoint not configured",
+				Duration: time.Since(start).String(),
+			}
+		}
+		reqBody = map[string]interface{}{
+			"model":      "auto",
+			"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+			"max_tokens": 5,
+			"stream":     false,
+		}
 	}
 
-	resp, err := hc.httpCli.R().
+	httpCli := hc.httpCli
+	if provider == "openrouter" {
+		httpCli = resty.New().
+			SetBaseURL("https://openrouter.ai/api/v1").
+			SetHeaders(headers).
+			SetTimeout(10 * time.Second)
+	}
+
+	resp, err := httpCli.R().
 		SetContext(ctx).
 		SetBody(reqBody).
-		Post(hc.llmCfg.Endpoint)
+		Post("/chat/completions")
 
-	c.Duration = time.Since(start).String()
+	c := Check{Duration: time.Since(start).String()}
 	if err != nil {
 		c.Status = "error"
 		c.Message = fmt.Sprintf("request failed: %v", err)
@@ -189,7 +218,6 @@ func (hc *Checker) checkLLM(ctx context.Context) Check {
 	// 400 (bad model) or 200 both mean the server is reachable
 	c.Status = "ok"
 	if resp.StatusCode() == 400 {
-		c.Status = "ok"
 		c.Message = "server reachable (model not found — expected for minimal ping)"
 	}
 
@@ -201,8 +229,8 @@ func (hc *Checker) checkTelegram(ctx context.Context) Check {
 
 	if hc.botCfg.Token == "" {
 		return Check{
-			Status:  "warn",
-			Message: "Telegram token not configured",
+			Status:   "warn",
+			Message:  "Telegram token not configured",
 			Duration: time.Since(start).String(),
 		}
 	}

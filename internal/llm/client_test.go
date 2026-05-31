@@ -22,9 +22,9 @@ func newTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 func TestRankWithLLM_Success(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		resp := chatResponse{
-			Choices: []choicePayload{
-				{Message: msgPayload{
+		resp := llamaChatResponse{
+			Choices: []llamaChoice{
+				{Message: llamaMsg{
 					Content: `1. Первая новость
    Краткое описание первой новости. URL: https://example.com/1
 2. Вторая новость
@@ -39,6 +39,7 @@ func TestRankWithLLM_Success(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
 		Endpoint:      server.URL + "/v1/chat/completions",
 		Model:         "test-model",
 		Temperature:   0.3,
@@ -79,6 +80,7 @@ func TestRankWithLLM_ServerError_Fallback(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
 		Endpoint:      server.URL + "/v1/chat/completions",
 		Model:         "test-model",
 		Temperature:   0.3,
@@ -118,6 +120,7 @@ func TestRankWithLLM_EmptyItems(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
 		Endpoint:      server.URL + "/v1/chat/completions",
 		Model:         "test-model",
 		Temperature:   0.3,
@@ -142,9 +145,9 @@ func TestRankWithLLM_EmptyItems(t *testing.T) {
 func TestRankWithLLM_EmptyResponse_Fallback(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		resp := chatResponse{
-			Choices: []choicePayload{
-				{Message: msgPayload{Content: ""}},
+		resp := llamaChatResponse{
+			Choices: []llamaChoice{
+				{Message: llamaMsg{Content: ""}},
 			},
 		}
 		json.NewEncoder(w).Encode(resp)
@@ -152,6 +155,7 @@ func TestRankWithLLM_EmptyResponse_Fallback(t *testing.T) {
 	defer server.Close()
 
 	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
 		Endpoint:      server.URL + "/v1/chat/completions",
 		Model:         "test-model",
 		Temperature:   0.3,

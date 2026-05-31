@@ -22,12 +22,27 @@ rss:
   cache_ttl: 24h                # TTL кэша дедупликации
 
 llm:
+  # Provider: "llama-cpp" (local llama.cpp) or "openrouter"
+  # Для llama-cpp: endpoint обязателен, api_key опционален
+  # Для openrouter: endpoint не используется (https://openrouter.ai/api/v1), api_key обязателен
+  provider: "llama-cpp"
   endpoint: "http://127.0.0.1:8080"
   model: "llama-3-8b-instruct-Q5_K_M"
+  api_key: ""
   temperature: 0.3
   max_tokens: 2000
   context_window: 8192
   timeout: 60s
+
+# Пример для OpenRouter:
+# llm:
+#   provider: "openrouter"
+#   model: "meta-llama/llama-3.1-8b-instruct"
+#   api_key: "sk-or-v1-..."  # Ваш OpenRouter API ключ
+#   temperature: 0.3
+#   max_tokens: 2000
+#   context_window: 8192
+#   timeout: 60s
 
 schedule:
   cron: "0 9 * * *"             # Ежедневно в 09:00

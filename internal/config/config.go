@@ -40,8 +40,10 @@ type RSSConfig struct {
 }
 
 type LLMConfig struct {
+	Provider      string        `mapstructure:"provider"`
 	Endpoint      string        `mapstructure:"endpoint"`
 	Model         string        `mapstructure:"model"`
+	APIKey        string        `mapstructure:"api_key"`
 	Temperature   float64       `mapstructure:"temperature"`
 	MaxTokens     int           `mapstructure:"max_tokens"`
 	ContextWindow int           `mapstructure:"context_window"`
@@ -126,6 +128,21 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.LLM.Temperature <= 0 || cfg.LLM.Temperature > 2 {
 		cfg.LLM.Temperature = 0.3
+	}
+	if cfg.LLM.Provider == "" {
+		cfg.LLM.Provider = "llama-cpp"
+	}
+
+	// Validate provider
+	switch cfg.LLM.Provider {
+	case "llama-cpp", "openrouter":
+		// llama-cpp: optional API key (may not be needed for local endpoints)
+		// openrouter: api_key is required
+	default:
+		return fmt.Errorf("llm.provider must be 'llama-cpp' or 'openrouter', got %q", cfg.LLM.Provider)
+	}
+	if cfg.LLM.Provider == "openrouter" && cfg.LLM.APIKey == "" {
+		return fmt.Errorf("llm.api_key is required for openrouter provider")
 	}
 	if cfg.App.LogLevel == "" {
 		cfg.App.LogLevel = "info"
