@@ -26,7 +26,7 @@ llm:
   # Для llama-cpp: endpoint обязателен, api_key опционален
   # Для openrouter: endpoint не используется (https://openrouter.ai/api/v1), api_key обязателен
   provider: "llama-cpp"
-  endpoint: "http://127.0.0.1:8080"
+  endpoint: "http://host.docker.internal:8080"
   model: "llama-3-8b-instruct-Q5_K_M"
   api_key: ""
   temperature: 0.3

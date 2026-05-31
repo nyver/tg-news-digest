@@ -23,7 +23,7 @@ COPY --from=builder /bot /app/bot
 COPY configs/config.example.yaml /app/config.example.yaml
 
 ENV TG_NEWS_BOT_TOKEN=""
-ENV TG_NEWS_LLM_ENDPOINT="http://127.0.0.1:8080"
+ENV TG_NEWS_LLM_ENDPOINT="http://host.docker.internal:8080"
 ENV TG_NEWS_APP_HEALTH_PORT="9100"
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
