@@ -11,6 +11,7 @@ Telegram-бот для ежедневного новостного дайдже�
 - [Структура проекта](#-структура-проекта)
 - [Быстрый старт](#-быстрый-старт)
 - [Docker](#-docker)
+- [Docker Compose](#-docker-compose)
 - [Конфигурация](#-конфигурация)
 - [Команды бота](#-команды-бота)
 - [Healthcheck API](#healthcheck-api)
@@ -116,6 +117,52 @@ Healthcheck встроен в образ и проверяет HTTP-эндпои
 
 ```bash
 docker inspect --format='{{.State.Health.Status}}' tg-news-digest
+```
+
+## 🐙 Docker Compose
+
+### Быстрый запуск
+
+```bash
+# Подготовка конфигурации
+cp configs/config.example.yaml configs/config.yaml
+# Отредактируйте configs/config.yaml — укажите токен бота и RSS-ленты
+
+# Сборка и запуск
+docker compose up -d
+```
+
+### Просмотр логов
+
+```bash
+docker compose logs -f tg-news-digest
+```
+
+### Остановка
+
+```bash
+docker compose down
+# С удалением данных (БД будет сброшена)
+docker compose down -v
+```
+
+### Переопределение конфигурации
+
+По умолчанию используется `configs/config.yaml`, смонтированный как `config.example.yaml` внутри контейнера.
+Чтобы использовать другой файл:
+
+```yaml
+# docker-compose.override.yml
+services:
+  tg-news-digest:
+    volumes:
+      - ./configs/production.yaml:/app/config.example.yaml:ro
+```
+
+И запустить:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 ```
 
 ## ⚙️ Конфигурация

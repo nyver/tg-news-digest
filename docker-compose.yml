@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  tg-news-digest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tg-news-digest
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - ./configs/config.yaml:/app/config.example.yaml:ro
+      - bot-data:/app/data
+    environment:
+      - TZ=Europe/Moscow
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9100/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  bot-data:
+    driver: local
