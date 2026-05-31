@@ -288,6 +288,31 @@ make test
 go test ./internal/bot/ -v -count=1
 ```
 
+### Покрытие тестами
+
+Цель — **более 70%** покрытия критических пакетов. Текущее состояние:
+
+| Пакет | Покрытие | Статус |
+|---|---|---|
+| `internal/rss` | 86.4% | ✅ |
+| `internal/healthcheck` | 79.6% | ✅ |
+| `internal/llm` | 78.1% | ✅ |
+| `internal/config` | 80.0% | ✅ |
+| `internal/scheduler` | 75.0% | ✅ |
+| `internal/formatter` | 67.2% | ⚠️ |
+| `internal/storage` | 64.8% | ⚠️ |
+| `internal/bot` | 33.8% | 🔴 |
+| `cmd/bot` | 0.0% | 🔴 |
+
+Для запуска отчёта о покрытии:
+
+```bash
+make coverage
+# или
+go test ./... -coverprofile=coverage.out
+go tool cover -html=coverage.out  # откроет отчёт в браузере
+```
+
 ## ⚠️ Обработка ошибок
 
 | Сценарий | Поведение |

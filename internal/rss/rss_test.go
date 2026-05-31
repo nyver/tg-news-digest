@@ -23,13 +23,13 @@ const testFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
       <title>News One</title>
       <description>Description of news one</description>
       <link>https://example.com/news-one</link>
-      <pubDate>Wed, 27 May 2026 10:00:00 +0000</pubDate>
+      <pubDate>Sun, 31 May 2026 10:00:00 +0000</pubDate>
     </item>
     <item>
       <title>News Two</title>
       <description>Description of news two</description>
       <link>https://example.com/news-two</link>
-      <pubDate>Wed, 27 May 2026 08:00:00 +0000</pubDate>
+      <pubDate>Sun, 31 May 2026 08:00:00 +0000</pubDate>
     </item>
     <item>
       <title>Old News</title>

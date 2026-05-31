@@ -134,6 +134,15 @@ func (hc *Checker) Check(ctx context.Context) HealthResponse {
 
 func (hc *Checker) checkDatabase(ctx context.Context) Check {
 	start := time.Now()
+
+	if hc.store == nil {
+		return Check{
+			Status:   "error",
+			Message:  "store is nil",
+			Duration: time.Since(start).String(),
+		}
+	}
+
 	err := hc.store.DB().PingContext(ctx)
 	dur := time.Since(start)
 
@@ -283,9 +292,13 @@ func (hc *Checker) StartHTTPServer(ctx context.Context) (*http.Server, func()) {
 	}
 
 	go func() {
-		hc.logger.Info("healthcheck: server started", slog.String("addr", srv.Addr))
+		if hc.logger != nil {
+			hc.logger.Info("healthcheck: server started", slog.String("addr", srv.Addr))
+		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			hc.logger.Error("healthcheck: server error", slog.String("error", err.Error()))
+			if hc.logger != nil {
+				hc.logger.Error("healthcheck: server error", slog.String("error", err.Error()))
+			}
 		}
 	}()
 
