@@ -10,6 +10,7 @@ Telegram-бот для ежедневного новостного дайдже�
 - [Возможности](#-возможности)
 - [Структура проекта](#-структура-проекта)
 - [Быстрый старт](#-быстрый-старт)
+- [Docker](#-docker)
 - [Конфигурация](#-конфигурация)
 - [Команды бота](#-команды-бота)
 - [Healthcheck API](#healthcheck-api)
@@ -19,12 +20,13 @@ Telegram-бот для ежедневного новостного дайдже�
 
 ## ✨ Возможности
 
-- **Ежедневный дайджест** — автоматическая генерация и рассылка топ-10 новостей
-- **AI-ранжирование** — llama.cpp (OpenAI-совместимый API) для выбора и суммаризации новостей
-- **RSS-интеграция** — параллельный сбор из нескольких источников
-- **Дедупликация** — SHA256-хэширование + TTL-кэширование в SQLite
-- **Отказоустойчивость** — retry, fallback на raw top-10, graceful shutdown
-- **Healthcheck** — HTTP endpoint для мониторинга всех компонентов
+- **Ежедневный дайджест** — автоматическая генерация и рассылка топ-10 новостей всем подписчикам
+- **AI-ранжирование** — два провайдера: llama.cpp (локально) и OpenRouter (облако)
+- **RSS-интеграция** — параллельный сбор из HTTP-URL и локальных XML-файлов
+- **Дедупликация** — SHA256-хэширование (title|link) + TTL-кэширование в SQLite (WAL-режим)
+- **Отказоустойчивость** — fallback на raw top-10 при ошибке LLM, graceful shutdown, авто-отписка заблокированных
+- **Healthcheck** — HTTP endpoint для мониторинга БД, LLM и Telegram
+- **Двойное логирование** — JSON в файл + текст в stdout
 
 ## 🏗 Структура проекта
 
@@ -40,10 +42,11 @@ Telegram-бот для ежедневного новостного дайдже�
 │   ├── rss/                  # RSS-фетчер
 │   ├── scheduler/            # Cron-планировщик
 │   ├── storage/              # SQLite хранилище
-│   ├── tgbot/                # Обёртка над Telegram API
+│   ├── tgbot/                # (пустой) Заготовка для обёртки над Telegram API
 │   └── version/              # Версия приложения
 ├── configs/
 │   └── config.example.yaml   # Пример конфигурации
+├── Dockerfile                # Docker-образ (multi-stage)
 ├── data/                      # БД и логи
 └── tests/                     # Юнит-тесты
 ```
@@ -76,6 +79,45 @@ make build
 ./bin/tg-news-digest --config configs/config.yaml
 ```
 
+## 🐳 Docker
+
+### Сборка образа
+
+```bash
+docker build -t tg-news-digest .
+```
+
+### Запуск
+
+```bash
+docker run -d \
+  --name tg-news-digest \
+  -p 9100:9100 \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/configs:/app/configs \
+  -e TG_NEWS_BOT_TOKEN="YOUR_BOT_TOKEN" \
+  -e TG_NEWS_LLM_ENDPOINT="http://host.docker.internal:8080" \
+  tg-news-digest
+```
+
+Или с кастомным конфиг-файлом:
+
+```bash
+docker run -d \
+  --name tg-news-digest \
+  -p 9100:9100 \
+  -v ./configs/config.yaml:/app/config.example.yaml:ro \
+  tg-news-digest
+```
+
+### Healthcheck
+
+Healthcheck встроен в образ и проверяет HTTP-эндпоинт каждые 30 секунд:
+
+```bash
+docker inspect --format='{{.State.Health.Status}}' tg-news-digest
+```
+
 ## ⚙️ Конфигурация
 
 Файл: `configs/config.yaml`
@@ -86,7 +128,7 @@ bot:
   parse_mode: "HTML"               # HTML или MarkdownV2
   owner_chat_id: 0                 # Chat ID для admin-команд
   mtproxy:
-    enabled: false                 # Включить использование MTProxy
+    enabled: false                 # Включить использование MTProxy (частичная поддержка)
     host: "example.com"            # Адрес MTProxy-сервера
     port: 443                      # Порт MTProxy-сервера (по умолчанию 443)
     secret: ""                     # Base64-кодированный секрет прокси
@@ -100,8 +142,10 @@ rss:
   cache_ttl: 24h
 
 llm:
+  provider: "llama-cpp"            # llama-cpp или openrouter
   endpoint: "http://127.0.0.1:8080"
   model: "llama-3-8b-instruct-Q5_K_M"
+  api_key: ""                      # Для openrouter обязателен
   temperature: 0.3
   max_tokens: 2000
   context_window: 8192
@@ -200,19 +244,27 @@ go test ./internal/bot/ -v -count=1
 
 | Сценарий | Поведение |
 |---|---|
-| RSS недоступен/таймаут | Retry (3x), пропуск ленты, `warn`-лог |
-| LLM вернул ошибку/пустоту | Fallback на raw top-10 по дате |
-| Telegram rate limit (429) | Пакетная отправка с 50ms задержкой |
+| RSS недоступен/таймаут | Пропуск ленты с `warn`-логом, остальные ленты обрабатываются параллельно |
+| LLM вернул ошибку/пустоту | Fallback на raw top-10 по дате публикации |
+| Telegram rate limit (429) | Пакетная отправка с 50ms задержкой между сообщениями |
+| Блокировка бота / активация удалена | Подписчик автоматически помечается как неактивный |
 | БД недоступна | Аварийный выход |
-| Контекст LLM переполнен | Усечение описаний, повторный запрос |
+| Graceful shutdown | SIGINT/SIGTERM → 2s drain, остановка scheduler и long-polling |
 
 ## ❓ FAQ
 
 **Q: Где взять RSS-ленты для Telegram-каналов?**
-A: Используйте RSSHub (`rsshub.app/telegram/channel/<channel_name>`) или альтернативные мосты: `tg2rss`, публичные списки (`t.me/s/<channel_name>`).
+A: Используйте RSSHub (`rsshub.app/telegram/channel/<channel_name>`) или альтернативные мосты: `tg2rss`, публичные списки (`t.me/s/<channel_name>`). Также поддерживаются локальные XML-файлы — укажите путь в конфиге, например `./data/rss/local-feed.xml`.
 
-**Q: Что если llama.cpp недоступен?**
-A: Бот автоматически переключится на fallback — топ-10 по дате публикации с пометкой `⚠️ AI недоступен`.
+**Q: Какие LLM-провайдеры поддерживаются?**
+A: Два провайдера через единый интерфейс:
+- **llama-cpp** — локальный сервер llama.cpp с OpenAI-compatible API (endpoint из конфига, optional API key)
+- **openrouter** — облачный доступ через OpenRouter.ai (API key обязателен)
+
+Переключается полем `llm.provider` в конфиге.
+
+**Q: Что если LLM недоступен?**
+A: Бот автоматически переключится на fallback — топ-10 по дате публикации без AI-ранжирования.
 
 **Q: Как часто выходит дайджест?**
 A: По расписанию cron — по умолчанию `0 9 * * *` (ежедневно в 09:00 по Moscow Time). Можно изменить в конфиге или через `/digest` (owner).
@@ -221,7 +273,7 @@ A: По расписанию cron — по умолчанию `0 9 * * *` (еж�
 A: SQLite в WAL-режиме. Используйте `sqlite3 .dump` или просто копию файла `data/bot.db`.
 
 **Q: Можно ли использовать с прокси?**
-A: Да, настройте переменные окружения `HTTP_PROXY` / `HTTPS_PROXY`, или используйте MTProxy в конфиге бота.
+A: Да, настройте переменные окружения `HTTP_PROXY` / `HTTPS_PROXY`, или используйте MTProxy в конфиге бота (поддержка частичная).
 
 ---
 
