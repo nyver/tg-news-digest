@@ -11,20 +11,37 @@ import (
 func buildUserPrompt(items []models.NewsItem, dateStr string) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("Выбери ровно 10 самых важных новостей за %s из списка ниже.\n\n", dateStr))
+	sb.WriteString(fmt.Sprintf("Ты — опытный новостной редактор. Выбери ровно 10 самых важных новостей за %s из списка ниже.\n\n", dateStr))
+	sb.WriteString("Критерии важности новости (в порядке приоритета):\n")
+	sb.WriteString("1. Глобальный масштаб влияния — затрагивает множество людей или стран\n")
+	sb.WriteString("2. Актуальность — произошло недавно, имеет прямое отношение к текущей повестке\n")
+	sb.WriteString("3. Уникальность — новость не является дублем, имеет оригинальный информационный повод\n")
+	sb.WriteString("4. Социальная значимость — политика, экономика, безопасность, наука, технологии\n")
+	sb.WriteString("5. Достоверность источника — учитывай авторитетность издания, если она указана\n\n")
+
+	sb.WriteString("Правила отбора:\n")
+	sb.WriteString("— Избегай дублирующихся новостей на одну тему (выбирай одну — наиболее полную)\n")
+	sb.WriteString("— Не включай рекламные материалы, анонсы и спонсорский контент\n")
+	sb.WriteString("— Не учитывай сенсационность заголовка — оценивай реальную значимость события\n")
+	sb.WriteString("— При равной важности отдавай предпочтение более свежей новости\n\n")
+
 	sb.WriteString("Отвечай на русском языке. Переведи заголовки и описания на русский, если они на иностранном.\n\n")
 	sb.WriteString("НОВОСТИ:\n")
 
+	//sb.WriteString(fmt.Sprintf("Выбери ровно 10 самых важных новостей за %s из списка ниже.\n\n", dateStr))
+	//sb.WriteString("Отвечай на русском языке. Переведи заголовки и описания на русский, если они на иностранном.\n\n")
+	sb.WriteString("НОВОСТИ:\n")
+
 	for i, item := range items {
-		sb.WriteString(fmt.Sprintf("---\n"))
+		sb.WriteString("---\n")
 		sb.WriteString(fmt.Sprintf("Заголовок: %s\n", item.Title))
 		if item.Description != "" {
 			sb.WriteString(fmt.Sprintf("Описание: %s\n", item.Description))
 		}
 		sb.WriteString(fmt.Sprintf("Ссылка: %s\n", item.Link))
-		sb.WriteString(fmt.Sprintf("---\n"))
+		sb.WriteString("---\n")
 		// Limit number of items sent to avoid context overflow
-		if i >= 49 {
+		if i >= 99 {
 			sb.WriteString(fmt.Sprintf("...\n[остальные %d элементов пропущены для экономии контекста]\n", len(items)-i-1))
 			break
 		}

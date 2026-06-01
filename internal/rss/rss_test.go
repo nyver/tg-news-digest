@@ -2,6 +2,7 @@ package rss
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,22 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
+const oldNewsXML = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
     <title>Test Feed</title>
-    <item>
-      <title>News One</title>
-      <description>Description of news one</description>
-      <link>https://example.com/news-one</link>
-      <pubDate>Sun, 31 May 2026 10:00:00 +0000</pubDate>
-    </item>
-    <item>
-      <title>News Two</title>
-      <description>Description of news two</description>
-      <link>https://example.com/news-two</link>
-      <pubDate>Sun, 31 May 2026 08:00:00 +0000</pubDate>
-    </item>
     <item>
       <title>Old News</title>
       <description>This is old</description>
@@ -40,11 +29,42 @@ const testFeedXML = `<?xml version="1.0" encoding="UTF-8"?>
   </channel>
 </rss>`
 
+func testFeedXML() string {
+	now := time.Now().UTC()
+	recent1 := now.Add(-2 * time.Hour).Format(time.RFC1123Z)
+	recent2 := now.Add(-4 * time.Hour).Format(time.RFC1123Z)
+	old := "Mon, 01 Jan 2025 10:00:00 +0000"
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Test Feed</title>
+    <item>
+      <title>News One</title>
+      <description>Description of news one</description>
+      <link>https://example.com/news-one</link>
+      <pubDate>%s</pubDate>
+    </item>
+    <item>
+      <title>News Two</title>
+      <description>Description of news two</description>
+      <link>https://example.com/news-two</link>
+      <pubDate>%s</pubDate>
+    </item>
+    <item>
+      <title>Old News</title>
+      <description>This is old</description>
+      <link>https://example.com/old</link>
+      <pubDate>%s</pubDate>
+    </item>
+  </channel>
+</rss>`, recent1, recent2, old)
+}
+
 func testServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/rss+xml")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(testFeedXML))
+		w.Write([]byte(testFeedXML()))
 	}))
 }
 
@@ -169,7 +189,7 @@ func TestFetchAll_DedupViaStorage(t *testing.T) {
 func TestFetchLocalFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	localPath := filepath.Join(tmpDir, "feed.xml")
-	err := os.WriteFile(localPath, []byte(testFeedXML), 0644)
+	err := os.WriteFile(localPath, []byte(testFeedXML()), 0644)
 	require.NoError(t, err)
 
 	ctx := context.Background()
