@@ -71,7 +71,9 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem) ([]mo
 		if httpTimeout <= 0 {
 			httpTimeout = 30 * time.Second
 		}
-		ctx, _ = context.WithTimeout(ctx, httpTimeout)
+		var cancelHTTP context.CancelFunc
+		ctx, cancelHTTP = context.WithTimeout(ctx, httpTimeout)
+		defer cancelHTTP()
 	}
 
 	req := &ChatRequest{

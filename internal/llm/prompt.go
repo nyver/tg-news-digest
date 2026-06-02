@@ -28,10 +28,6 @@ func buildUserPrompt(items []models.NewsItem, dateStr string) string {
 	sb.WriteString("Отвечай на русском языке. Переведи заголовки и описания на русский, если они на иностранном.\n\n")
 	sb.WriteString("НОВОСТИ:\n")
 
-	//sb.WriteString(fmt.Sprintf("Выбери ровно 10 самых важных новостей за %s из списка ниже.\n\n", dateStr))
-	//sb.WriteString("Отвечай на русском языке. Переведи заголовки и описания на русский, если они на иностранном.\n\n")
-	sb.WriteString("НОВОСТИ:\n")
-
 	for i, item := range items {
 		sb.WriteString("---\n")
 		sb.WriteString(fmt.Sprintf("Заголовок: %s\n", item.Title))
@@ -53,7 +49,7 @@ func buildUserPrompt(items []models.NewsItem, dateStr string) string {
 // truncateForContext cuts descriptions and the item list to fit the character budget.
 func truncateForContext(items []models.NewsItem, maxChars int) []models.NewsItem {
 	if maxChars <= 0 {
-		maxChars = 4000
+		maxChars = 32000
 	}
 
 	// Estimate total chars

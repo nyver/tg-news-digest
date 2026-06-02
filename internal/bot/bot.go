@@ -318,8 +318,14 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 
 	text := formatter.Digest(items, date, formatter.ParseMode(b.cfg.ParseMode))
 
-	// Use semaphore to limit concurrent goroutines (prevent resource exhaustion with many subscribers)
-	const maxConcurrentSends = 100
+	// Global rate limiter: one send token per 50ms (~20 msg/s, within Telegram's limit).
+	// Each goroutine waits for a tick, so sends are serialised through the ticker channel.
+	rateLimiter := time.NewTicker(50 * time.Millisecond)
+	defer rateLimiter.Stop()
+
+	// Semaphore caps the number of goroutines waiting on rateLimiter to avoid
+	// creating thousands of goroutines for very large subscriber lists.
+	const maxConcurrentSends = 20
 	sem := make(chan struct{}, maxConcurrentSends)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -330,15 +336,19 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 		go func(id int64) {
 			defer wg.Done()
 
-			// Acquire semaphore slot
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			// Context-aware rate limiting: ~50ms between messages
+			// Acquire semaphore slot with ctx awareness.
 			select {
+			case sem <- struct{}{}:
 			case <-ctx.Done():
 				return
-			case <-time.After(50 * time.Millisecond):
+			}
+			defer func() { <-sem }()
+
+			// Wait for a rate limiter token (globally serialises sends).
+			select {
+			case <-rateLimiter.C:
+			case <-ctx.Done():
+				return
 			}
 
 			if err := b.SendRaw(ctx, id, text); err != nil {
@@ -351,7 +361,12 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 					strings.Contains(err.Error(), "bot was blocked") ||
 					strings.Contains(err.Error(), "user is deactivated") {
 					b.logger.Warn("bot: marking subscriber as inactive", slog.Int64("chat_id", id))
-					b.store.Unsubscribe(ctx, id)
+					if unsubErr := b.store.Unsubscribe(ctx, id); unsubErr != nil {
+						b.logger.Warn("bot: unsubscribe failed",
+							slog.Int64("chat_id", id),
+							slog.String("error", unsubErr.Error()),
+						)
+					}
 				}
 			}
 		}(chatID)

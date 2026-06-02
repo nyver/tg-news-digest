@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -134,19 +135,27 @@ func main() {
 		}
 	}()
 
-	// Start bot polling
-	logger.Info("bot: starting polling")
-	if err := b.Start(ctx); err != nil {
-		logger.Error("bot: polling error", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
-
-	// Wait for shutdown signal
+	// Register signal handler before starting polling so no signal is missed.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
 
-	logger.Info("bot: shutdown signal received, draining...")
+	// Start bot polling in background so the signal handler below is reachable.
+	pollErr := make(chan error, 1)
+	go func() {
+		logger.Info("bot: starting polling")
+		pollErr <- b.Start(ctx)
+	}()
+
+	// Block until a shutdown signal or a fatal polling error.
+	select {
+	case sig := <-quit:
+		logger.Info("bot: shutdown signal received", slog.String("signal", sig.String()))
+	case err := <-pollErr:
+		if err != nil {
+			logger.Error("bot: polling error", slog.String("error", err.Error()))
+		}
+	}
+
 	cancel()
 	sched.Stop()
 
@@ -244,22 +253,23 @@ type multiHandler struct {
 	handlers []slog.Handler
 }
 
-func (m *multiHandler) Enabled(_ context.Context, level slog.Level) bool {
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
 	for _, h := range m.handlers {
-		if h.Enabled(context.Background(), level) {
+		if h.Enabled(ctx, level) {
 			return true
 		}
 	}
 	return false
 }
 
-func (m *multiHandler) Handle(_ context.Context, r slog.Record) error {
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var errs []error
 	for _, h := range m.handlers {
-		if err := h.Handle(context.Background(), r); err != nil {
-			return err
+		if err := h.Handle(ctx, r); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {

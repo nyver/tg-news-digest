@@ -282,17 +282,40 @@ func TestCheck_UPTIMEDuration(t *testing.T) {
 }
 
 func TestHandler_HTTPStatusCodes(t *testing.T) {
-	// Test that status codes are correctly mapped
-	t.Run("HealthyIs200", func(t *testing.T) {
-		assert.Equal(t, http.StatusOK, http.StatusOK)
-	})
-
+	// Degraded: valid DB, but empty bot token and LLM endpoint → warns → 503
 	t.Run("DegradedIs503", func(t *testing.T) {
-		assert.Equal(t, http.StatusServiceUnavailable, http.StatusServiceUnavailable)
+		ctx := context.Background()
+		store, err := storage.New(ctx, ":memory:")
+		require.NoError(t, err)
+		defer store.Close()
+
+		cfg := config.Config{
+			Bot: config.BotConfig{Token: ""},
+			LLM: config.LLMConfig{Provider: "llama-cpp", Endpoint: ""},
+		}
+		checker := New(cfg, store, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		w := httptest.NewRecorder()
+		checker.Handler().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	})
 
+	// Unhealthy: nil store → database error → 500
 	t.Run("UnhealthyIs500", func(t *testing.T) {
-		assert.Equal(t, http.StatusInternalServerError, http.StatusInternalServerError)
+		checker := &Checker{
+			store:   nil,
+			botCfg:  config.BotConfig{Token: ""},
+			llmCfg:  config.LLMConfig{Provider: "llama-cpp", Endpoint: ""},
+			started: time.Now(),
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		w := httptest.NewRecorder()
+		checker.Handler().ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
 	})
 }
 
