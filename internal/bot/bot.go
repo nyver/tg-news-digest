@@ -103,6 +103,7 @@ func NewWithAPI(api TGAPI, cfg config.BotConfig, fmttr *formatter.Formatter, sto
 }
 
 // Start begins long-polling for updates.
+// Long-polling timeout is set to 60 seconds per update (Telegram API recommendation).
 func (b *Bot) Start(ctx context.Context) error {
 	config := tgbotapi.NewUpdate(0)
 	config.Timeout = 60
@@ -317,6 +318,9 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 
 	text := formatter.Digest(items, date, formatter.ParseMode(b.cfg.ParseMode))
 
+	// Use semaphore to limit concurrent goroutines (prevent resource exhaustion with many subscribers)
+	const maxConcurrentSends = 100
+	sem := make(chan struct{}, maxConcurrentSends)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	failedCount := 0
@@ -326,8 +330,16 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 		go func(id int64) {
 			defer wg.Done()
 
-			// Telegram rate limiting: ~50ms between messages
-			time.Sleep(50 * time.Millisecond)
+			// Acquire semaphore slot
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Context-aware rate limiting: ~50ms between messages
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
 
 			if err := b.SendRaw(ctx, id, text); err != nil {
 				mu.Lock()

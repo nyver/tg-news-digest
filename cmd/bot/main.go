@@ -150,6 +150,7 @@ func main() {
 	cancel()
 	sched.Stop()
 
+	// Grace period for cleanup operations and goroutine shutdown
 	time.Sleep(2 * time.Second)
 	logger.Info("bot: stopped")
 }
@@ -192,7 +193,10 @@ func buildPipeline(
 
 		// 2. Save items
 		if err := rssFetcher.SaveAndCleanup(ctx, fetchResult.Items); err != nil {
-			logger.Warn("pipeline: save items failed", slog.String("error", err.Error()))
+			logger.Warn("pipeline: save items failed",
+				slog.String("error", err.Error()),
+				slog.Int("item_count", len(fetchResult.Items)),
+			)
 		}
 
 		// 3. Rank with LLM

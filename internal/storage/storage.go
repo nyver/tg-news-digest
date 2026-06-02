@@ -37,6 +37,14 @@ func New(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("storage: set busy timeout: %w", err)
 	}
 
+	// Configure connection pool for concurrent access
+	// MaxOpenConns: limit total concurrent connections to SQLite (WAL allows ~5)
+	// MaxIdleConns: keep connections ready for reuse
+	// MaxLifetime: periodically refresh connections
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 	store := &Store{db: db}
 
 	if err := store.migrate(ctx); err != nil {

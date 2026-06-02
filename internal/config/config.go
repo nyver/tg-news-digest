@@ -188,6 +188,11 @@ func Validate(cfg *Config) error {
 		return fmt.Errorf("schedule.cron: %w", err)
 	}
 
+	// Validate timezone is valid
+	if _, err := time.LoadLocation(cfg.Schedule.Timezone); err != nil {
+		return fmt.Errorf("schedule.timezone: invalid timezone %q: %w", cfg.Schedule.Timezone, err)
+	}
+
 	return nil
 }
 

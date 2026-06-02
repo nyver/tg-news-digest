@@ -18,6 +18,7 @@ var (
 
 // parseLLMResponse extracts ranked news items from the LLM's free-text response.
 // It tries to match numbered items and extract title, summary, and URL.
+// If parsing fails, falls back to raw top-10 by date.
 func parseLLMResponse(response string, originalItems []models.NewsItem) ([]models.RankedNewsItem, error) {
 	response = strings.TrimSpace(response)
 	if response == "" {
@@ -30,9 +31,20 @@ func parseLLMResponse(response string, originalItems []models.NewsItem) ([]model
 		return ranked, nil
 	}
 
-	// Fallback: use the original items sorted by date (shouldn't happen, but safe)
-	slog.Warn("llm: structured parse returned 0 items, falling back")
+	// Fallback: use the original items sorted by date when parse fails
+	slog.Warn("llm: structured parse returned 0 items, falling back to raw top-10",
+		slog.String("response_sample", truncateForLog(response, 200)),
+		slog.Int("available_items", len(originalItems)),
+	)
 	return createFallback(originalItems), nil
+}
+
+// truncateForLog truncates a string to maxLen for safe logging output.
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "…"
 }
 
 // tryParseStructured attempts to parse the LLM response into RankedNewsItem slices.
