@@ -73,13 +73,14 @@ func TestParseLLMResponse_NoNumberedItems(t *testing.T) {
 		{ID: "2", Title: "Fallback 2", Link: "http://b", PublishedAt: time.Now().Add(-1 * time.Hour)},
 	}
 
+	// parseLLMResponse now returns an error when structured parse yields 0 items;
+	// the caller (RankWithLLM) is responsible for calling createFallback with llmUsed=false.
 	ranked, err := parseLLMResponse(response, items, 10)
-	if err != nil {
-		t.Fatalf("parseLLMResponse error: %v", err)
+	if err == nil {
+		t.Fatal("expected error when response has no numbered items")
 	}
-	// Should fall back to raw items
-	if len(ranked) != 2 {
-		t.Errorf("expected 2 fallback items, got %d", len(ranked))
+	if ranked != nil {
+		t.Errorf("expected nil ranked on parse error, got %d items", len(ranked))
 	}
 }
 

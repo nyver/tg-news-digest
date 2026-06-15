@@ -138,10 +138,19 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 	}
 
 	msg := update.Message
+
+	// msg.From is nil for channel posts and anonymous group admins.
+	var fromID int64
+	var fromUsername string
+	if msg.From != nil {
+		fromID = msg.From.ID
+		fromUsername = msg.From.UserName
+	}
+
 	b.logger.Info("bot: incoming message",
 		slog.Int64("chat_id", msg.Chat.ID),
-		slog.Int64("from_id", msg.From.ID),
-		slog.String("from_username", msg.From.UserName),
+		slog.Int64("from_id", fromID),
+		slog.String("from_username", fromUsername),
 		slog.Int("message_id", msg.MessageID),
 		slog.Int("date", msg.Date),
 		slog.Bool("is_command", msg.IsCommand()),
@@ -316,7 +325,7 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 		return nil
 	}
 
-	text := b.formatter.Digest(items, date)
+	parts := b.formatter.DigestParts(items, date)
 
 	// Global rate limiter: one send token per 50ms (~20 msg/s, within Telegram's limit).
 	// Each goroutine waits for a tick, so sends are serialised through the ticker channel.
@@ -344,29 +353,32 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 			}
 			defer func() { <-sem }()
 
-			// Wait for a rate limiter token (globally serialises sends).
-			select {
-			case <-rateLimiter.C:
-			case <-ctx.Done():
-				return
-			}
+			for _, part := range parts {
+				// Wait for a rate limiter token (globally serialises sends).
+				select {
+				case <-rateLimiter.C:
+				case <-ctx.Done():
+					return
+				}
 
-			if err := b.SendRaw(ctx, id, text); err != nil {
-				mu.Lock()
-				failedCount++
-				mu.Unlock()
+				if err := b.SendRaw(ctx, id, part); err != nil {
+					mu.Lock()
+					failedCount++
+					mu.Unlock()
 
-				// Check if it's a permanent failure (bot blocked us)
-				if strings.Contains(err.Error(), "chat not found") ||
-					strings.Contains(err.Error(), "bot was blocked") ||
-					strings.Contains(err.Error(), "user is deactivated") {
-					b.logger.Warn("bot: marking subscriber as inactive", slog.Int64("chat_id", id))
-					if unsubErr := b.store.Unsubscribe(ctx, id); unsubErr != nil {
-						b.logger.Warn("bot: unsubscribe failed",
-							slog.Int64("chat_id", id),
-							slog.String("error", unsubErr.Error()),
-						)
+					// Check if it's a permanent failure (bot blocked us)
+					if strings.Contains(err.Error(), "chat not found") ||
+						strings.Contains(err.Error(), "bot was blocked") ||
+						strings.Contains(err.Error(), "user is deactivated") {
+						b.logger.Warn("bot: marking subscriber as inactive", slog.Int64("chat_id", id))
+						if unsubErr := b.store.Unsubscribe(ctx, id); unsubErr != nil {
+							b.logger.Warn("bot: unsubscribe failed",
+								slog.Int64("chat_id", id),
+								slog.String("error", unsubErr.Error()),
+							)
+						}
 					}
+					return
 				}
 			}
 		}(chatID)

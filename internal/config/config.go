@@ -109,6 +109,9 @@ func Validate(cfg *Config) error {
 	if cfg.Bot.Token == "" {
 		return fmt.Errorf("bot.token is required")
 	}
+	if len(cfg.RSS.Feeds) == 0 {
+		return fmt.Errorf("rss.feeds must contain at least one feed URL")
+	}
 	if cfg.RSS.MaxItemsPerFeed <= 0 {
 		cfg.RSS.MaxItemsPerFeed = 50
 	}

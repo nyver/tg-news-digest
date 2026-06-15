@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -18,7 +19,10 @@ type Store struct {
 
 // New creates a new Store and runs migrations.
 func New(ctx context.Context, dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite", dbPath)
+	// busy_timeout and loc=UTC are set via DSN so every connection in the pool
+	// inherits them automatically (PRAGMA set on a single conn is not inherited).
+	dsn := fmt.Sprintf("file:%s?_busy_timeout=5000&_loc=UTC", dbPath)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("storage: open db: %w", err)
 	}
@@ -29,15 +33,11 @@ func New(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("storage: set WAL mode: %w", err)
 	}
 
-	_, err = db.ExecContext(ctx, `PRAGMA busy_timeout=5000`)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("storage: set busy timeout: %w", err)
-	}
-
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	// SQLite supports only one writer at a time; a single open connection
+	// eliminates SQLITE_BUSY under concurrent goroutines.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0) // keep the single connection alive indefinitely
 
 	store := &Store{db: db}
 
@@ -97,8 +97,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 
-	// Add trigger column to digest_runs (idempotent: ignore error if column exists).
-	s.db.ExecContext(ctx, `ALTER TABLE digest_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'cron'`) //nolint:errcheck
+	// Add trigger column to digest_runs — idempotent: ignore only "duplicate column" errors.
+	_, alterErr := s.db.ExecContext(ctx, `ALTER TABLE digest_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'cron'`)
+	if alterErr != nil && !strings.Contains(alterErr.Error(), "duplicate column name") {
+		return fmt.Errorf("storage: alter digest_runs: %w", alterErr)
+	}
 
 	return nil
 }
@@ -198,7 +201,7 @@ func (s *Store) SaveItems(ctx context.Context, items []models.NewsItem, ttl time
 			item.FeedURL, ttlStr,
 		)
 		if err != nil {
-			return err
+			return fmt.Errorf("storage: insert item %s: %w", item.ID, err)
 		}
 	}
 
@@ -262,25 +265,32 @@ func (s *Store) GetLastRun(ctx context.Context) (*models.DigestRun, error) {
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	return run, err
+	if err != nil {
+		return nil, err
+	}
+	run.RunAt = run.RunAt.UTC()
+	return run, nil
 }
 
-// GetLastCronRun returns the run_at time of the last successful cron-triggered digest.
-// Returns nil if no cron has ever run successfully.
-func (s *Store) GetLastCronRun(ctx context.Context) (*time.Time, error) {
-	var runAt time.Time
+// GetLastSuccessfulRun returns the run_at time of the last successful or fallback digest
+// (any trigger). This is used to advance the RSS fetch window so that both manual /digest
+// runs and scheduled cron runs are counted — preventing duplicate broadcasts.
+// Returns nil if no digest has ever run successfully.
+func (s *Store) GetLastSuccessfulRun(ctx context.Context) (*time.Time, error) {
+	var t time.Time
 	err := s.db.QueryRowContext(ctx,
 		`SELECT run_at FROM digest_runs
-		 WHERE COALESCE(trigger, 'cron') = 'cron' AND status != 'failed'
+		 WHERE status != 'failed'
 		 ORDER BY id DESC LIMIT 1`,
-	).Scan(&runAt)
+	).Scan(&t)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &runAt, nil
+	utc := t.UTC()
+	return &utc, nil
 }
 
 // CleanupOldDigestRuns removes digest run records older than the given duration.

@@ -24,7 +24,10 @@ import (
 func main() {
 	cfg := config.MustLoad()
 
-	logger := setupLogger(cfg.App)
+	logger, logFile := setupLogger(cfg.App)
+	if logFile != nil {
+		defer logFile.Close()
+	}
 	logger.Info("bot: starting",
 		slog.String("db_path", cfg.App.DBPath),
 	)
@@ -174,10 +177,11 @@ func buildPipeline(
 	return func(ctx context.Context, trigger string) (*models.DigestRun, []models.RankedNewsItem, error) {
 		logger.Info("pipeline: starting digest run", slog.String("trigger", trigger))
 
-		// 1. Compute fetch window: since last cron run, default to last 24h.
+		// 1. Compute fetch window: since the last successful run (any trigger),
+		// so that manual /digest commands advance the window just like cron.
 		since := time.Now().Add(-24 * time.Hour)
-		if lastCron, err := store.GetLastCronRun(ctx); err == nil && lastCron != nil {
-			since = *lastCron
+		if lastRun, err := store.GetLastSuccessfulRun(ctx); err == nil && lastRun != nil {
+			since = *lastRun
 		}
 		logger.Info("pipeline: fetch window", slog.Time("since", since))
 
@@ -298,30 +302,29 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 }
 
 // setupLogger configures slog with both file (JSON) and console (text) output.
-func setupLogger(cfg config.AppConfig) *slog.Logger {
+// The returned *os.File must be closed by the caller when the process exits.
+func setupLogger(cfg config.AppConfig) (*slog.Logger, *os.File) {
 	opts := &slog.HandlerOptions{
 		Level:     parseLogLevel(cfg.LogLevel),
 		AddSource: true,
 	}
 
 	var handlers []slog.Handler
+	var logFile *os.File
 
 	if cfg.DigestLogPath != "" {
 		f, err := os.OpenFile(cfg.DigestLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to open log file: %v\n", err)
 		} else {
+			logFile = f
 			handlers = append(handlers, slog.NewJSONHandler(f, opts))
 		}
 	}
 
 	handlers = append(handlers, slog.NewTextHandler(os.Stdout, opts))
 
-	if len(handlers) == 0 {
-		return slog.New(slog.NewTextHandler(os.Stdout, opts))
-	}
-
-	return slog.New(&multiHandler{handlers: handlers})
+	return slog.New(&multiHandler{handlers: handlers}), logFile
 }
 
 // parseLogLevel converts a string to a slog.Level.

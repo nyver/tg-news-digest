@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/mmcdole/gofeed"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/nyver/tg-news-digest/internal/config"
 	"github.com/nyver/tg-news-digest/internal/models"
@@ -28,9 +27,8 @@ type Fetcher struct {
 // New creates a new Fetcher.
 func New(cfg config.RSSConfig, store *storage.Store) *Fetcher {
 	return &Fetcher{
-		cfg:    cfg,
-		store:  store,
-		parser: gofeed.NewParser(),
+		cfg:   cfg,
+		store: store,
 	}
 }
 
@@ -57,24 +55,19 @@ func (f *Fetcher) FetchAll(ctx context.Context, since time.Time) (*FetchResult, 
 	}
 
 	ch := make(chan feedResult, len(f.cfg.Feeds))
-	grp, ctx := errgroup.WithContext(ctx)
 	var wg sync.WaitGroup
 	wg.Add(len(f.cfg.Feeds))
 
 	for _, feedURL := range f.cfg.Feeds {
 		feedURL := feedURL
-		grp.Go(func() error {
+		go func() {
 			defer wg.Done()
 			items, err := f.fetchSingle(ctx, feedURL, since)
 			ch <- feedResult{items: items, url: feedURL, err: err}
-			return err
-		})
+		}()
 	}
 
-	if err := grp.Wait(); err != nil {
-		return nil, fmt.Errorf("rss: fetch group: %w", err)
-	}
-
+	// Close channel once all goroutines finish, then drain below.
 	go func() {
 		wg.Wait()
 		close(ch)
@@ -113,14 +106,13 @@ func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string, since time.Ti
 		parser.Client = httpClient
 		feed, err = parser.ParseURLWithContext(feedURL, ctx)
 	} else {
-		data, err := os.ReadFile(feedURL)
+		// Local file path — read and parse separately to avoid variable shadowing.
+		var data []byte
+		data, err = os.ReadFile(feedURL)
 		if err != nil {
 			return nil, fmt.Errorf("rss: read local feed %s: %w", feedURL, err)
 		}
 		feed, err = parser.Parse(strings.NewReader(string(data)))
-		if err != nil {
-			return nil, fmt.Errorf("rss: parse local feed %s: %w", feedURL, err)
-		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("rss: parse feed %s: %w", feedURL, err)
@@ -130,10 +122,6 @@ func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string, since time.Ti
 	var items []models.NewsItem
 
 	for _, entry := range feed.Items {
-		if len(items) >= f.cfg.MaxItemsPerFeed {
-			break
-		}
-
 		pubDate := entry.PublishedParsed
 		if pubDate == nil {
 			continue
@@ -163,6 +151,11 @@ func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string, since time.Ti
 			PublishedAt: *pubDate,
 			FeedURL:     feedURL,
 		})
+
+		// Cap after dedup+date filtering so we keep the most recent valid items.
+		if len(items) >= f.cfg.MaxItemsPerFeed {
+			break
+		}
 	}
 
 	return items, nil

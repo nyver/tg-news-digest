@@ -46,30 +46,34 @@ N. ЗАГОЛОВОК
 }
 
 // RankWithLLM sends collected news to the LLM and returns the top-N ranked items with summaries.
-// Returns (ranked items, llmUsed, error). On any failure, falls back to raw top-N by date.
+// Returns (ranked items, llmUsed, error). On any LLM/parse failure, falls back to raw top-N by date
+// from the FULL original list (not the context-truncated subset).
 func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem, topN int) ([]models.RankedNewsItem, bool, error) {
 	if len(items) == 0 {
 		return nil, false, nil
 	}
 
-	// Sort items by publication time (most recent first)
+	// Sort a copy by date; keep the original for fallback so truncation does not
+	// hide the most recent items when we fall back to sort-by-date.
 	sorted := make([]models.NewsItem, len(items))
 	copy(sorted, items)
 	sortItemsByDate(sorted)
 
-	// Truncate to fit context window budget
+	// Truncate to fit context window budget (for LLM input only).
 	contextCharLimit := int(float64(c.cfg.ContextWindow) * 0.6)
-	sorted = truncateForContext(sorted, contextCharLimit)
+	forLLM := truncateForContext(sorted, contextCharLimit)
 
-	dateStr := sorted[0].PublishedAt.Format("02.01.2006")
-	prompt := buildUserPrompt(sorted, dateStr, topN)
+	dateStr := forLLM[0].PublishedAt.Format("02.01.2006")
+	prompt := buildUserPrompt(forLLM, dateStr, topN)
 
 	// Derive a context with a timeout for the provider call.
 	deadline, ok := ctx.Deadline()
 	if !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.cfg.Timeout)
-		defer cancel()
+		if c.cfg.Timeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, c.cfg.Timeout)
+			defer cancel()
+		}
 	} else {
 		httpTimeout := time.Until(deadline) - 2*time.Minute
 		if httpTimeout <= 0 {
@@ -95,7 +99,7 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem, topN 
 
 	c.logger.Debug("llm: raw response", slog.String("response", content))
 
-	ranked, err := parseLLMResponse(content, sorted, topN)
+	ranked, err := parseLLMResponse(content, forLLM, topN)
 	if err != nil {
 		c.logger.Warn("llm: parse failed, using fallback", slog.String("error", err.Error()))
 		return createFallback(sorted, topN), false, nil

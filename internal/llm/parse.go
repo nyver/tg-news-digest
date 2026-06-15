@@ -13,32 +13,36 @@ import (
 )
 
 var (
-	// Matches URLs within text
+	// urlRe matches URLs within text.
 	urlRe = regexp.MustCompile(`https?://[^\s]+`)
+
+	// rankRe matches numbered list items like "1. Title" or "10. Title".
+	rankRe = regexp.MustCompile(`^(\d{1,2})\.\s+(.+)`)
+
+	// trailingPunct are characters that LLMs commonly append after a URL.
+	trailingPunct = `.,;:)'"` + "`"
 )
 
 // parseLLMResponse extracts ranked news items from the LLM's free-text response.
-// It tries to match numbered items and extract title, summary, and URL.
-// If parsing fails, falls back to raw top-N by date.
+// Returns an error if structured parsing yields 0 items so the caller can
+// distinguish a real parse failure from an empty-but-valid result.
 func parseLLMResponse(response string, originalItems []models.NewsItem, topN int) ([]models.RankedNewsItem, error) {
 	response = strings.TrimSpace(response)
 	if response == "" {
 		return nil, fmt.Errorf("llm: empty response")
 	}
 
-	// Try structured parsing first
 	ranked := tryParseStructured(response, topN)
 	if len(ranked) > 0 {
 		return enrichRankedItems(ranked, originalItems), nil
 	}
 
-	// Fallback: use the original items sorted by date when parse fails
-	slog.Warn("llm: structured parse returned 0 items, falling back to raw top-N",
+	slog.Warn("llm: structured parse returned 0 items",
 		slog.String("response_sample", truncateForLog(response, 200)),
 		slog.Int("available_items", len(originalItems)),
 		slog.Int("top_n", topN),
 	)
-	return createFallback(originalItems, topN), nil
+	return nil, fmt.Errorf("llm: structured parse returned 0 items")
 }
 
 // truncateForLog truncates a string to maxLen for safe logging output.
@@ -69,10 +73,9 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 			continue
 		}
 
-		// Detect numbered item start
-		rankMatch := regexp.MustCompile(`^(\d{1,2})\.\s+(.+)`)
-		if match := rankMatch.FindStringSubmatch(line); match != nil {
-			// Save previous item
+		// Detect numbered item start using package-level compiled regex.
+		if match := rankRe.FindStringSubmatch(line); match != nil {
+			// Save previous item.
 			if inItem && currentTitle != "" {
 				ranked = append(ranked, models.RankedNewsItem{
 					Rank:    currentRank,
@@ -82,7 +85,7 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 				})
 			}
 
-			// Start new item
+			// Start new item.
 			inItem = true
 			var err error
 			currentRank, err = strconv.Atoi(match[1])
@@ -90,7 +93,6 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 				currentRank = len(ranked) + 1
 			}
 			currentTitle = strings.TrimSpace(match[2])
-			// Limit title length
 			if len([]rune(currentTitle)) > 80 {
 				currentTitle = truncateRunes(currentTitle, 80) + "…"
 			}
@@ -99,33 +101,32 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 			continue
 		}
 
-		// If we're in an item, accumulate summary and look for URL
+		// Accumulate summary and extract URL from body lines.
 		if inItem {
-			// Look for URL in this line
-			if urls := urlRe.FindString(line); urls != "" {
-				currentURL = urls
+			if u := urlRe.FindString(line); u != "" {
+				currentURL = strings.TrimRight(u, trailingPunct)
 			}
-			// Accumulate non-URL text as summary (all lines, not just the first)
-			textWithoutURL := urlRe.ReplaceAllString(line, "")
-			textWithoutURL = strings.TrimSpace(textWithoutURL)
-			// Remove common label prefixes
-			textWithoutURL = strings.TrimPrefix(textWithoutURL, "URL:")
-			textWithoutURL = strings.TrimPrefix(textWithoutURL, "Ссылка:")
-			textWithoutURL = strings.TrimPrefix(textWithoutURL, "Источник:")
-			// Remove trailing label if URL was on same line ("... URL:" left after regex strip)
-			textWithoutURL = strings.TrimSuffix(textWithoutURL, "URL:")
-			textWithoutURL = strings.TrimSuffix(textWithoutURL, "Ссылка:")
-			textWithoutURL = strings.TrimSpace(textWithoutURL)
-			if textWithoutURL != "" {
+			// Strip URLs, then clean up label remnants.
+			text := urlRe.ReplaceAllString(line, "")
+			text = strings.TrimSpace(text)
+			text = strings.TrimPrefix(text, "URL:")
+			text = strings.TrimPrefix(text, "Ссылка:")
+			text = strings.TrimPrefix(text, "Источник:")
+			text = strings.TrimSuffix(text, "URL:")
+			text = strings.TrimSuffix(text, "Ссылка:")
+			// Remove stray "URL:" fragments in the middle of the text.
+			text = strings.ReplaceAll(text, " URL:", "")
+			text = strings.TrimSpace(text)
+			if text != "" {
 				if currentSummary.Len() > 0 {
 					currentSummary.WriteString(" ")
 				}
-				currentSummary.WriteString(textWithoutURL)
+				currentSummary.WriteString(text)
 			}
 		}
 	}
 
-	// Don't forget the last item
+	// Flush the last item.
 	if inItem && currentTitle != "" {
 		ranked = append(ranked, models.RankedNewsItem{
 			Rank:    currentRank,
@@ -135,12 +136,9 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 		})
 	}
 
-	// Limit to topN
 	if len(ranked) > topN {
 		ranked = ranked[:topN]
 	}
-
-	// Re-rank sequentially
 	for i := range ranked {
 		ranked[i].Rank = i + 1
 	}
@@ -148,7 +146,7 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 	return ranked
 }
 
-// createFallback generates top-N ranked items from the original list
+// createFallback generates top-N ranked items from the given list
 // sorted by publication time (most recent first).
 func createFallback(items []models.NewsItem, topN int) []models.RankedNewsItem {
 	if len(items) == 0 {

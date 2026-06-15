@@ -40,6 +40,83 @@ func (f *Formatter) Digest(items []models.RankedNewsItem, date time.Time) string
 	return Digest(items, date, f.mode, f.topN)
 }
 
+// DigestParts splits the digest into Telegram-safe chunks (≤4096 runes each).
+// The header is always in the first chunk; each news item is kept intact.
+// If a single item alone exceeds maxLen it is truncated with an ellipsis.
+func (f *Formatter) DigestParts(items []models.RankedNewsItem, date time.Time) []string {
+	const maxLen = 4096
+
+	header := DigestHeader(date, f.mode, f.topN)
+
+	// Build per-item strings with correct rank numbers.
+	itemStrings := make([]string, len(items))
+	for i, item := range items {
+		itemStrings[i] = digestBodyItem(item, i+1, f.mode)
+		// Guard: a single item that exceeds the limit is truncated.
+		if runes := []rune(itemStrings[i]); len(runes) > maxLen {
+			itemStrings[i] = string(runes[:maxLen-1]) + "…"
+		}
+	}
+
+	var parts []string
+	current := header
+	for _, s := range itemStrings {
+		candidate := current + "\n\n" + s
+		if len([]rune(candidate)) > maxLen {
+			// current is non-empty (at minimum the header); flush it.
+			parts = append(parts, current)
+			current = s
+		} else {
+			current = candidate
+		}
+	}
+	if current != "" {
+		parts = append(parts, current)
+	}
+	return parts
+}
+
+// digestBodyItem formats a single ranked item with the given display rank number.
+func digestBodyItem(item models.RankedNewsItem, rank int, mode ParseMode) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%d. ", rank))
+	switch mode {
+	case HTML:
+		title := stripHTML(item.Title)
+		summary := stripHTML(item.Summary)
+		sb.WriteString(fmt.Sprintf("<b>%s</b>\n", escapeHTML(title)))
+		if summary != "" {
+			sb.WriteString(escapeHTML(summary))
+		}
+		if link := safeLink(item.Link); link != "" {
+			sb.WriteString(fmt.Sprintf(". <a href=\"%s\">Подробнее</a>", escapeHTML(link)))
+		}
+		if meta := buildMeta(item, mode); meta != "" {
+			sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
+		}
+	case MarkdownV2:
+		sb.WriteString(fmt.Sprintf("*%s*\n", escapeMD(stripHTML(item.Title))))
+		if item.Summary != "" {
+			sb.WriteString(escapeMD(item.Summary))
+		}
+		if link := safeLink(item.Link); link != "" {
+			sb.WriteString(fmt.Sprintf(". [Подробнее](%s)", link))
+		}
+		if meta := buildMeta(item, mode); meta != "" {
+			sb.WriteString(fmt.Sprintf("\n_%s_", meta))
+		}
+	}
+	return sb.String()
+}
+
+// safeLink returns link only if it uses http/https scheme; otherwise returns "".
+func safeLink(link string) string {
+	if strings.HasPrefix(link, "https://") || strings.HasPrefix(link, "http://") {
+		return link
+	}
+	return ""
+}
+
 // DigestHeader returns the date header for the digest.
 func DigestHeader(date time.Time, mode ParseMode, topN int) string {
 	dateStr := date.Format("02.01.2006")
@@ -69,20 +146,19 @@ func DigestBody(items []models.RankedNewsItem, mode ParseMode) string {
 			if summary != "" {
 				sb.WriteString(escapeHTML(summary))
 			}
-			if item.Link != "" {
-				sb.WriteString(fmt.Sprintf(". <a href=\"%s\">Подробнее</a>", escapeHTML(item.Link)))
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString(fmt.Sprintf(". <a href=\"%s\">Подробнее</a>", escapeHTML(link)))
 			}
 			if meta := buildMeta(item, mode); meta != "" {
 				sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
 			}
 		case MarkdownV2:
-			sb.WriteString(fmt.Sprintf("*%s*", escapeMD(item.Title)))
-			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("*%s*\n", escapeMD(item.Title)))
 			if item.Summary != "" {
 				sb.WriteString(escapeMD(item.Summary))
 			}
-			if item.Link != "" {
-				sb.WriteString(fmt.Sprintf(". [Подробнее](%s)", item.Link))
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString(fmt.Sprintf(". [Подробнее](%s)", link))
 			}
 			if meta := buildMeta(item, mode); meta != "" {
 				sb.WriteString(fmt.Sprintf("\n_%s_", meta))
@@ -90,7 +166,7 @@ func DigestBody(items []models.RankedNewsItem, mode ParseMode) string {
 		}
 
 		if i < len(items)-1 {
-			sb.WriteString("\n")
+			sb.WriteString("\n\n")
 		}
 	}
 
