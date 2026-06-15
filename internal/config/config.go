@@ -122,7 +122,7 @@ func Validate(cfg *Config) error {
 		cfg.LLM.ContextWindow = 8192
 	}
 	if cfg.LLM.MaxTokens <= 0 {
-		cfg.LLM.MaxTokens = 2000
+		cfg.LLM.MaxTokens = 4000
 	}
 	if cfg.LLM.Timeout <= 0 {
 		cfg.LLM.Timeout = 60 * time.Second

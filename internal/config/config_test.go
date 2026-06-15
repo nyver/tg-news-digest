@@ -77,7 +77,7 @@ rss:
 	assert.Equal(t, 15*time.Second, cfg.RSS.FetchTimeout)
 	assert.Equal(t, 24*time.Hour, cfg.RSS.CacheTTL)
 	assert.Equal(t, 8192, cfg.LLM.ContextWindow)
-	assert.Equal(t, 2000, cfg.LLM.MaxTokens)
+	assert.Equal(t, 4000, cfg.LLM.MaxTokens)
 	assert.Equal(t, 0.3, cfg.LLM.Temperature)
 	assert.Equal(t, 60*time.Second, cfg.LLM.Timeout)
 	assert.Equal(t, "0 9 * * *", cfg.Schedule.Cron)

@@ -105,18 +105,22 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 			if urls := urlRe.FindString(line); urls != "" {
 				currentURL = urls
 			}
-			// Accumulate non-URL text as summary
+			// Accumulate non-URL text as summary (all lines, not just the first)
 			textWithoutURL := urlRe.ReplaceAllString(line, "")
 			textWithoutURL = strings.TrimSpace(textWithoutURL)
-			if textWithoutURL != "" && currentSummary.Len() == 0 {
-				// First non-empty line after title = summary
-				// Remove common prefixes
-				textWithoutURL = strings.TrimPrefix(textWithoutURL, "URL:")
-				textWithoutURL = strings.TrimPrefix(textWithoutURL, "Ссылка:")
-				textWithoutURL = strings.TrimPrefix(textWithoutURL, "Источник:")
-				textWithoutURL = strings.TrimSpace(textWithoutURL)
+			// Remove common label prefixes
+			textWithoutURL = strings.TrimPrefix(textWithoutURL, "URL:")
+			textWithoutURL = strings.TrimPrefix(textWithoutURL, "Ссылка:")
+			textWithoutURL = strings.TrimPrefix(textWithoutURL, "Источник:")
+			// Remove trailing label if URL was on same line ("... URL:" left after regex strip)
+			textWithoutURL = strings.TrimSuffix(textWithoutURL, "URL:")
+			textWithoutURL = strings.TrimSuffix(textWithoutURL, "Ссылка:")
+			textWithoutURL = strings.TrimSpace(textWithoutURL)
+			if textWithoutURL != "" {
+				if currentSummary.Len() > 0 {
+					currentSummary.WriteString(" ")
+				}
 				currentSummary.WriteString(textWithoutURL)
-				currentSummary.WriteString(" ")
 			}
 		}
 	}
