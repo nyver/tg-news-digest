@@ -11,21 +11,19 @@ import (
 func buildUserPrompt(items []models.NewsItem, dateStr string, topN int) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("Ты — опытный новостной редактор. Выбери ровно %d самых важных новостей за %s из списка ниже.\n\n", topN, dateStr))
-	sb.WriteString("Критерии важности новости (в порядке приоритета):\n")
-	sb.WriteString("1. Глобальный масштаб влияния — затрагивает множество людей или стран\n")
-	sb.WriteString("2. Актуальность — произошло недавно, имеет прямое отношение к текущей повестке\n")
-	sb.WriteString("3. Уникальность — новость не является дублем, имеет оригинальный информационный повод\n")
-	sb.WriteString("4. Социальная значимость — политика, экономика, безопасность, наука, технологии\n")
-	sb.WriteString("5. Достоверность источника — учитывай авторитетность издания, если она указана\n\n")
+	// Language requirement comes first so the model sees it before the news content.
+	sb.WriteString("TRANSLATE TO RUSSIAN: All titles and descriptions in your response must be written in Russian. Translate from English or any other language.\n\n")
+	sb.WriteString(fmt.Sprintf("Выбери ровно %d самых важных новостей за %s из списка ниже.\n\n", topN, dateStr))
+	sb.WriteString("Критерии важности (по приоритету):\n")
+	sb.WriteString("1. Глобальный масштаб влияния\n")
+	sb.WriteString("2. Актуальность\n")
+	sb.WriteString("3. Уникальность (без дублей)\n")
+	sb.WriteString("4. Социальная значимость: политика, экономика, наука, технологии\n\n")
 
-	sb.WriteString("Правила отбора:\n")
-	sb.WriteString("— Избегай дублирующихся новостей на одну тему (выбирай одну — наиболее полную)\n")
-	sb.WriteString("— Не включай рекламные материалы, анонсы и спонсорский контент\n")
-	sb.WriteString("— Не учитывай сенсационность заголовка — оценивай реальную значимость события\n")
-	sb.WriteString("— При равной важности отдавай предпочтение более свежей новости\n\n")
-
-	sb.WriteString("ОБЯЗАТЕЛЬНО отвечай на русском языке. Если заголовок или описание на английском или другом иностранном языке — ПЕРЕВЕДИ их на русский полностью. Не оставляй ни одного иностранного слова в своём ответе.\n\n")
+	sb.WriteString("Правила:\n")
+	sb.WriteString("— Один информационный повод — одна новость\n")
+	sb.WriteString("— Без рекламы и анонсов\n")
+	sb.WriteString("— ВЕСЬ текст ответа — только на русском языке\n\n")
 	sb.WriteString("НОВОСТИ:\n")
 
 	for i, item := range items {
