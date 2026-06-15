@@ -55,7 +55,7 @@ func newTestBot(t *testing.T, broadcastFn BroadcastFunc) *Bot {
 	t.Helper()
 	mockAPI := new(mockTGAPI)
 	store := newTestStore(t)
-	fmttr := formatter.New(formatter.HTML)
+	fmttr := formatter.New(formatter.HTML, 10)
 
 	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, broadcastFn, slog.Default())
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestNew_RealAPI(t *testing.T) {
 	cfg := config.BotConfig{
 		Token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
 	}
-	fmttr := formatter.New(formatter.HTML)
+	fmttr := formatter.New(formatter.HTML, 10)
 	store := newTestStore(t)
 
 	_, err := New(cfg, fmttr, store, nil, slog.Default())
@@ -79,7 +79,7 @@ func TestNew_RealAPI(t *testing.T) {
 func TestNewWithAPI(t *testing.T) {
 	mockAPI := new(mockTGAPI)
 	store := newTestStore(t)
-	fmttr := formatter.New(formatter.HTML)
+	fmttr := formatter.New(formatter.HTML, 10)
 
 	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestBroadcast_Success(t *testing.T) {
 	err = store.SaveSubscriber(ctx, 200)
 	require.NoError(t, err)
 
-	fmttr := formatter.New(formatter.HTML)
+	fmttr := formatter.New(formatter.HTML, 10)
 	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
 	require.NoError(t, err)
 
@@ -137,7 +137,7 @@ func TestBroadcast_FailedSend_AutoUnsubscribe(t *testing.T) {
 	err = store.SaveSubscriber(ctx, 200)
 	require.NoError(t, err)
 
-	fmttr := formatter.New(formatter.HTML)
+	fmttr := formatter.New(formatter.HTML, 10)
 	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
 	require.NoError(t, err)
 
@@ -177,7 +177,7 @@ func TestBroadcast_RateLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	fmttr := formatter.New(formatter.HTML)
+	fmttr := formatter.New(formatter.HTML, 10)
 	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
 	require.NoError(t, err)
 
@@ -200,7 +200,7 @@ func TestBroadcast_ConcurrentSafe(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	fmttr := formatter.New(formatter.HTML)
+	fmttr := formatter.New(formatter.HTML, 10)
 	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
 	require.NoError(t, err)
 

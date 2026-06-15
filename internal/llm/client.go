@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -25,25 +26,26 @@ func New(cfg config.LLMConfig, logger *slog.Logger) *Client {
 	}
 }
 
-// --- System prompt ---
-
-const systemPrompt = `Ты — редактор новостного дайджеста на русском языке. Из списка ниже выбери ровно 10 самых важных и актуальных новостей за текущие сутки.
+// buildSystemPrompt returns a system prompt requesting exactly topN items.
+func buildSystemPrompt(topN int) string {
+	return fmt.Sprintf(`Ты — редактор новостного дайджеста на русском языке. Из списка ниже выбери ровно %d самых важных и актуальных новостей за текущие сутки.
 Отранжируй их по значимости, удали дубли и малозначимые события.
 Для каждой новости укажи:
 1. Краткий заголовок (до 10 слов)
-2. Одно предложение с сутью
+2. Краткое описание (2-3 предложения) — раскрой суть и контекст события
 3. Ссылку на источник
-Отформатируй вывод строго в виде нумерованного списка от 1 до 10.
+Отформатируй вывод строго в виде нумерованного списка от 1 до %d.
 Каждая новость в формате:
-1. ЗАГОЛОВОК
-   Краткое описание (1 предложение). URL: ссылка
+N. ЗАГОЛОВОК
+   Описание (2-3 предложения). URL: ссылка
 
 ВСЕ ответы должны быть на русском языке. Если новость на иностранном языке — переведи заголовок и описание на русский, сохранив смысл.
-Не добавляй вступлений, заключений, комментариев или пояснений. Выведи только нумерованный список новостей.`
+Не добавляй вступлений, заключений, комментариев или пояснений. Выведи только нумерованный список новостей.`, topN, topN)
+}
 
-// RankWithLLM sends collected news to the LLM and returns the top-10 ranked items with summaries.
-// Returns (ranked items, llmUsed, error). On any failure, falls back to raw top-10 by date.
-func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem) ([]models.RankedNewsItem, bool, error) {
+// RankWithLLM sends collected news to the LLM and returns the top-N ranked items with summaries.
+// Returns (ranked items, llmUsed, error). On any failure, falls back to raw top-N by date.
+func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem, topN int) ([]models.RankedNewsItem, bool, error) {
 	if len(items) == 0 {
 		return nil, false, nil
 	}
@@ -58,7 +60,7 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem) ([]mo
 	sorted = truncateForContext(sorted, contextCharLimit)
 
 	dateStr := sorted[0].PublishedAt.Format("02.01.2006")
-	prompt := buildUserPrompt(sorted, dateStr)
+	prompt := buildUserPrompt(sorted, dateStr, topN)
 
 	// Derive a context with a timeout for the provider call.
 	deadline, ok := ctx.Deadline()
@@ -78,7 +80,7 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem) ([]mo
 
 	req := &ChatRequest{
 		Model:       c.cfg.Model,
-		Messages:    []Message{{Role: "system", Content: systemPrompt}, {Role: "user", Content: prompt}},
+		Messages:    []Message{{Role: "system", Content: buildSystemPrompt(topN)}, {Role: "user", Content: prompt}},
 		Temperature: c.cfg.Temperature,
 		MaxTokens:   c.cfg.MaxTokens,
 	}
@@ -86,15 +88,15 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem) ([]mo
 	content, err := c.provider.Chat(ctx, req)
 	if err != nil {
 		c.logger.Warn("llm: request failed, using fallback", slog.String("error", err.Error()))
-		return createFallback(sorted), false, nil
+		return createFallback(sorted, topN), false, nil
 	}
 
 	c.logger.Debug("llm: raw response", slog.String("response", content))
 
-	ranked, err := parseLLMResponse(content, sorted)
+	ranked, err := parseLLMResponse(content, sorted, topN)
 	if err != nil {
 		c.logger.Warn("llm: parse failed, using fallback", slog.String("error", err.Error()))
-		return createFallback(sorted), false, nil
+		return createFallback(sorted, topN), false, nil
 	}
 
 	c.logger.Info("llm: parsed ranked items", slog.Int("count", len(ranked)))

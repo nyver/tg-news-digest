@@ -10,7 +10,7 @@ import (
 
 func TestDigestHeader_HTML(t *testing.T) {
 	date := time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC)
-	got := DigestHeader(date, HTML)
+	got := DigestHeader(date, HTML, 10)
 	want := "📰 <b>Топ-10 новостей за 25.05.2026</b>"
 	if got != want {
 		t.Errorf("DigestHeader(HTML) = %q, want %q", got, want)
@@ -19,9 +19,9 @@ func TestDigestHeader_HTML(t *testing.T) {
 
 func TestDigestHeader_MarkdownV2(t *testing.T) {
 	date := time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC)
-	got := DigestHeader(date, MarkdownV2)
+	got := DigestHeader(date, MarkdownV2, 10)
 	// Dots in dates are escaped for MarkdownV2 (this is safe)
-	want := "📰 *Топ-10 новостей за 25\\.05\\.2026*"
+	want := "📰 *Топ\\-10 новостей за 25\\.05\\.2026*"
 	if got != want {
 		t.Errorf("DigestHeader(MarkdownV2) = %q, want %q", got, want)
 	}
@@ -143,7 +143,7 @@ func TestDigest_Full(t *testing.T) {
 	items := []models.RankedNewsItem{
 		{Rank: 1, Title: "Test News", Summary: "A summary.", Link: "https://example.com"},
 	}
-	got := Digest(items, date, HTML)
+	got := Digest(items, date, HTML, 10)
 	if !strings.Contains(got, "Топ-10 новостей за 25.05.2026") {
 		t.Errorf("missing date header in %q", got)
 	}

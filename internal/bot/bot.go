@@ -316,7 +316,7 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 		return nil
 	}
 
-	text := formatter.Digest(items, date, formatter.ParseMode(b.cfg.ParseMode))
+	text := b.formatter.Digest(items, date)
 
 	// Global rate limiter: one send token per 50ms (~20 msg/s, within Telegram's limit).
 	// Each goroutine waits for a tick, so sends are serialised through the ticker channel.

@@ -125,19 +125,50 @@ func TestDigestRun(t *testing.T) {
 	run := models.DigestRun{
 		RunAt:     time.Now(),
 		Status:    "success",
+		Trigger:   "cron",
 		ItemCount: 10,
 		LLMUsed:   true,
 	}
 
-	err := s.SaveDigestRun(ctx, run)
+	runID, err := s.SaveDigestRun(ctx, run)
 	require.NoError(t, err)
+	assert.Positive(t, runID)
 
 	last, err := s.GetLastRun(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, last)
 	assert.Equal(t, "success", last.Status)
+	assert.Equal(t, "cron", last.Trigger)
 	assert.Equal(t, 10, last.ItemCount)
 	assert.True(t, last.LLMUsed)
+}
+
+func TestGetLastCronRun(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// No cron runs yet
+	last, err := s.GetLastCronRun(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, last)
+
+	// Save a command run — should not count
+	_, err = s.SaveDigestRun(ctx, models.DigestRun{RunAt: time.Now(), Status: "success", Trigger: "command"})
+	require.NoError(t, err)
+
+	last, err = s.GetLastCronRun(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, last, "command run should not be returned by GetLastCronRun")
+
+	// Save a cron run
+	cronTime := time.Now().Truncate(time.Second)
+	_, err = s.SaveDigestRun(ctx, models.DigestRun{RunAt: cronTime, Status: "success", Trigger: "cron"})
+	require.NoError(t, err)
+
+	last, err = s.GetLastCronRun(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, last)
+	assert.WithinDuration(t, cronTime, *last, time.Second)
 }
 
 func TestGetLastRun_NoRuns(t *testing.T) {

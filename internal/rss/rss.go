@@ -41,15 +41,15 @@ type FetchResult struct {
 	FeedsErr int
 }
 
-// FetchAll fetches all configured RSS feeds in parallel and returns deduplicated news items.
-func (f *Fetcher) FetchAll(ctx context.Context) (*FetchResult, error) {
+// FetchAll fetches all configured RSS feeds in parallel and returns news items published
+// after since. Items are deduplicated within the run by URL+title hash.
+func (f *Fetcher) FetchAll(ctx context.Context, since time.Time) (*FetchResult, error) {
 	result := &FetchResult{}
 
 	if len(f.cfg.Feeds) == 0 {
 		return result, nil
 	}
 
-	// Fetch feeds in parallel
 	type feedResult struct {
 		items []models.NewsItem
 		url   string
@@ -65,7 +65,7 @@ func (f *Fetcher) FetchAll(ctx context.Context) (*FetchResult, error) {
 		feedURL := feedURL
 		grp.Go(func() error {
 			defer wg.Done()
-			items, err := f.fetchSingle(ctx, feedURL)
+			items, err := f.fetchSingle(ctx, feedURL, since)
 			ch <- feedResult{items: items, url: feedURL, err: err}
 			return err
 		})
@@ -75,28 +75,32 @@ func (f *Fetcher) FetchAll(ctx context.Context) (*FetchResult, error) {
 		return nil, fmt.Errorf("rss: fetch group: %w", err)
 	}
 
-	// Close channel after all goroutines complete so range exits
 	go func() {
 		wg.Wait()
 		close(ch)
 	}()
 
+	// Merge results; deduplicate across feeds by hash.
+	seen := make(map[string]bool)
 	for fr := range ch {
 		if fr.err != nil {
 			result.FeedsErr++
 			continue
 		}
 		result.FeedsOK++
-		result.Items = append(result.Items, fr.items...)
+		for _, item := range fr.items {
+			if !seen[item.ID] {
+				seen[item.ID] = true
+				result.Items = append(result.Items, item)
+			}
+		}
 	}
 
 	return result, nil
 }
 
-// fetchSingle fetches a single RSS feed with retry logic.
-// If feedURL starts with http:// or https:// it is treated as a remote URL;
-// otherwise it is treated as a local file path.
-func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string) ([]models.NewsItem, error) {
+// fetchSingle fetches a single RSS feed and returns items published after since.
+func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string, since time.Time) ([]models.NewsItem, error) {
 	parser := gofeed.NewParser()
 
 	var (
@@ -105,15 +109,10 @@ func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string) ([]models.New
 	)
 
 	if strings.HasPrefix(feedURL, "http://") || strings.HasPrefix(feedURL, "https://") {
-		// Remote RSS feed via HTTP
-		httpClient := &http.Client{
-			Timeout: f.cfg.FetchTimeout,
-		}
+		httpClient := &http.Client{Timeout: f.cfg.FetchTimeout}
 		parser.Client = httpClient
-
 		feed, err = parser.ParseURLWithContext(feedURL, ctx)
 	} else {
-		// Local RSS file
 		data, err := os.ReadFile(feedURL)
 		if err != nil {
 			return nil, fmt.Errorf("rss: read local feed %s: %w", feedURL, err)
@@ -127,7 +126,6 @@ func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string) ([]models.New
 		return nil, fmt.Errorf("rss: parse feed %s: %w", feedURL, err)
 	}
 
-	now := time.Now()
 	seen := make(map[string]bool)
 	var items []models.NewsItem
 
@@ -136,47 +134,35 @@ func (f *Fetcher) fetchSingle(ctx context.Context, feedURL string) ([]models.New
 			break
 		}
 
-		// Skip items older than 24 hours
 		pubDate := entry.PublishedParsed
 		if pubDate == nil {
 			continue
 		}
-		if now.Sub(*pubDate) > 24*time.Hour {
+		// Skip items published before (or at) the since cutoff.
+		if !pubDate.After(since) {
 			continue
 		}
 
-		// Dedup by URL + title hash
 		hash := itemHash(entry.Title, entry.Link)
 		if seen[hash] {
 			continue
 		}
 		seen[hash] = true
 
-		// Check storage dedup
-		exists, err := f.store.ItemExists(ctx, hash)
-		if err != nil {
-			continue
-		}
-		if exists {
-			continue
-		}
-
-		// Truncate description for LLM context budget
 		desc := entry.Description
 		if desc == "" && entry.Content != "" {
 			desc = entry.Content
 		}
 		desc = truncate(desc, 300)
 
-		item := models.NewsItem{
+		items = append(items, models.NewsItem{
 			ID:          hash,
 			Title:       entry.Title,
 			Description: desc,
 			Link:        entry.Link,
 			PublishedAt: *pubDate,
 			FeedURL:     feedURL,
-		}
-		items = append(items, item)
+		})
 	}
 
 	return items, nil
@@ -201,7 +187,7 @@ func itemHash(title, link string) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// truncate limits a string to max bytes, adding ellipsis if truncated.
+// truncate limits a string to max runes, adding ellipsis if truncated.
 func truncate(s string, max int) string {
 	runes := []rune(s)
 	if len(runes) <= max {

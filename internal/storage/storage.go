@@ -23,24 +23,18 @@ func New(ctx context.Context, dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("storage: open db: %w", err)
 	}
 
-	// WAL mode for better concurrency
 	_, err = db.ExecContext(ctx, `PRAGMA journal_mode=WAL`)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("storage: set WAL mode: %w", err)
 	}
 
-	// Busy timeout
 	_, err = db.ExecContext(ctx, `PRAGMA busy_timeout=5000`)
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("storage: set busy timeout: %w", err)
 	}
 
-	// Configure connection pool for concurrent access
-	// MaxOpenConns: limit total concurrent connections to SQLite (WAL allows ~5)
-	// MaxIdleConns: keep connections ready for reuse
-	// MaxLifetime: periodically refresh connections
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(5 * time.Minute)
@@ -103,12 +97,14 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 	}
 
+	// Add trigger column to digest_runs (idempotent: ignore error if column exists).
+	s.db.ExecContext(ctx, `ALTER TABLE digest_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'cron'`) //nolint:errcheck
+
 	return nil
 }
 
 // --- Subscriber methods ---
 
-// SaveSubscriber stores or updates a subscriber.
 func (s *Store) SaveSubscriber(ctx context.Context, chatID int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO subscribers (chat_id, created_at, active)
@@ -119,7 +115,6 @@ func (s *Store) SaveSubscriber(ctx context.Context, chatID int64) error {
 	return err
 }
 
-// Unsubscribe marks a subscriber as inactive.
 func (s *Store) Unsubscribe(ctx context.Context, chatID int64) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE subscribers SET active = 0 WHERE chat_id = ?`,
@@ -128,7 +123,6 @@ func (s *Store) Unsubscribe(ctx context.Context, chatID int64) error {
 	return err
 }
 
-// IsActive checks if a subscriber exists and is active.
 func (s *Store) IsActive(ctx context.Context, chatID int64) (bool, error) {
 	var active int
 	err := s.db.QueryRowContext(ctx,
@@ -140,7 +134,6 @@ func (s *Store) IsActive(ctx context.Context, chatID int64) (bool, error) {
 	return active == 1, err
 }
 
-// GetActiveChats returns all active subscriber chat IDs.
 func (s *Store) GetActiveChats(ctx context.Context) ([]int64, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT chat_id FROM subscribers WHERE active = 1 ORDER BY chat_id`,
@@ -218,10 +211,7 @@ func (s *Store) CleanupExpired(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, raErr := res.RowsAffected()
-	if raErr != nil {
-		return 0, raErr
-	}
+	n, _ := res.RowsAffected()
 	return int(n), nil
 }
 
@@ -236,25 +226,29 @@ func (s *Store) CountActiveItems(ctx context.Context) (int, error) {
 
 // --- DigestRun methods ---
 
-// SaveDigestRun records a digest generation run.
-func (s *Store) SaveDigestRun(ctx context.Context, run models.DigestRun) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO digest_runs (run_at, status, item_count, llm_used, error_msg)
-		 VALUES (?, ?, ?, ?, ?)`,
+// SaveDigestRun records a digest generation run and returns the inserted row ID.
+func (s *Store) SaveDigestRun(ctx context.Context, run models.DigestRun) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO digest_runs (run_at, status, item_count, llm_used, error_msg, trigger)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 		run.RunAt.UTC().Format("2006-01-02 15:04:05"),
 		run.Status,
 		run.ItemCount,
 		run.LLMUsed,
 		run.ErrorMsg,
+		run.Trigger,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
 }
 
-// GetLastRun returns the most recent digest run.
+// GetLastRun returns the most recent digest run of any type.
 func (s *Store) GetLastRun(ctx context.Context) (*models.DigestRun, error) {
 	run := &models.DigestRun{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, run_at, status, item_count, llm_used, error_msg
+		`SELECT id, run_at, status, item_count, llm_used, COALESCE(error_msg, ''), COALESCE(trigger, 'cron')
 		 FROM digest_runs ORDER BY id DESC LIMIT 1`,
 	).Scan(
 		&run.ID,
@@ -263,11 +257,30 @@ func (s *Store) GetLastRun(ctx context.Context) (*models.DigestRun, error) {
 		&run.ItemCount,
 		&run.LLMUsed,
 		&run.ErrorMsg,
+		&run.Trigger,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	return run, err
+}
+
+// GetLastCronRun returns the run_at time of the last successful cron-triggered digest.
+// Returns nil if no cron has ever run successfully.
+func (s *Store) GetLastCronRun(ctx context.Context) (*time.Time, error) {
+	var runAt time.Time
+	err := s.db.QueryRowContext(ctx,
+		`SELECT run_at FROM digest_runs
+		 WHERE COALESCE(trigger, 'cron') = 'cron' AND status != 'failed'
+		 ORDER BY id DESC LIMIT 1`,
+	).Scan(&runAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &runAt, nil
 }
 
 // CleanupOldDigestRuns removes digest run records older than the given duration.
@@ -279,9 +292,6 @@ func (s *Store) CleanupOldDigestRuns(ctx context.Context, olderThan time.Duratio
 	if err != nil {
 		return 0, err
 	}
-	n, raErr := res.RowsAffected()
-	if raErr != nil {
-		return 0, raErr
-	}
+	n, _ := res.RowsAffected()
 	return int(n), nil
 }

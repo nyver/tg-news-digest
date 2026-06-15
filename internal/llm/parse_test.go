@@ -21,7 +21,7 @@ func TestParseLLMResponse_Valid(t *testing.T) {
 		{ID: "1", Title: "Title 1", Link: "https://example.com/1"},
 	}
 
-	ranked, err := parseLLMResponse(response, items)
+	ranked, err := parseLLMResponse(response, items, 10)
 	if err != nil {
 		t.Fatalf("parseLLMResponse error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestParseLLMResponse_LimitedTo10(t *testing.T) {
 	}
 
 	items := []models.NewsItem{}
-	ranked, err := parseLLMResponse(response.String(), items)
+	ranked, err := parseLLMResponse(response.String(), items, 10)
 	if err != nil {
 		t.Fatalf("parseLLMResponse error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestParseLLMResponse_LimitedTo10(t *testing.T) {
 
 func TestParseLLMResponse_Empty(t *testing.T) {
 	items := []models.NewsItem{{ID: "1", Title: "T", Link: "http://x"}}
-	_, err := parseLLMResponse("", items)
+	_, err := parseLLMResponse("", items, 10)
 	if err == nil {
 		t.Error("expected error for empty response")
 	}
@@ -73,7 +73,7 @@ func TestParseLLMResponse_NoNumberedItems(t *testing.T) {
 		{ID: "2", Title: "Fallback 2", Link: "http://b", PublishedAt: time.Now().Add(-1 * time.Hour)},
 	}
 
-	ranked, err := parseLLMResponse(response, items)
+	ranked, err := parseLLMResponse(response, items, 10)
 	if err != nil {
 		t.Fatalf("parseLLMResponse error: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCreateFallback(t *testing.T) {
 		{ID: "3", Title: "Mid", Link: "http://c", PublishedAt: time.Now().Add(-3 * time.Hour)},
 	}
 
-	fb := createFallback(items)
+	fb := createFallback(items, 10)
 	if len(fb) != 3 {
 		t.Fatalf("expected 3 fallback items, got %d", len(fb))
 	}
@@ -107,7 +107,7 @@ func TestCreateFallback(t *testing.T) {
 }
 
 func TestCreateFallback_Empty(t *testing.T) {
-	fb := createFallback(nil)
+	fb := createFallback(nil, 10)
 	if fb != nil {
 		t.Errorf("expected nil for empty input, got %d items", len(fb))
 	}
@@ -124,7 +124,7 @@ func TestCreateFallback_Limit10(t *testing.T) {
 		})
 	}
 
-	fb := createFallback(items)
+	fb := createFallback(items, 10)
 	if len(fb) != 10 {
 		t.Errorf("expected 10 fallback items, got %d", len(fb))
 	}
@@ -180,7 +180,7 @@ func TestBuildUserPrompt(t *testing.T) {
 		{Title: "Title 2", Description: "Desc 2", Link: "https://example.com/2"},
 	}
 
-	prompt := buildUserPrompt(items, "25.05.2026")
+	prompt := buildUserPrompt(items, "25.05.2026", 10)
 	if !strings.Contains(prompt, "25.05.2026") {
 		t.Error("prompt missing date")
 	}

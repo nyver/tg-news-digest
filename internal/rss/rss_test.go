@@ -89,8 +89,9 @@ func TestFetchSingle_Success(t *testing.T) {
 	defer server.Close()
 
 	f := newTestFetcherWithURL(t, server.URL)
+	since := time.Now().Add(-24 * time.Hour)
 
-	items, err := f.fetchSingle(context.Background(), server.URL)
+	items, err := f.fetchSingle(context.Background(), server.URL, since)
 	require.NoError(t, err)
 	assert.Len(t, items, 2) // Old news should be filtered out
 }
@@ -100,8 +101,9 @@ func TestFetchSingle_OldItemFiltered(t *testing.T) {
 	defer server.Close()
 
 	f := newTestFetcherWithURL(t, server.URL)
+	since := time.Now().Add(-24 * time.Hour)
 
-	items, err := f.fetchSingle(context.Background(), server.URL)
+	items, err := f.fetchSingle(context.Background(), server.URL, since)
 	require.NoError(t, err)
 
 	for _, item := range items {
@@ -126,9 +128,10 @@ func TestFetchAll_MultipleFeeds(t *testing.T) {
 	}
 	f := New(cfg, store)
 
-	result, err := f.FetchAll(ctx)
+	since := time.Now().Add(-24 * time.Hour)
+	result, err := f.FetchAll(ctx, since)
 	require.NoError(t, err)
-	// Both feeds return 2 items, but dedup removes duplicates
+	// Both feeds return 2 items, but cross-feed dedup removes duplicates
 	assert.GreaterOrEqual(t, result.FeedsOK, 1)
 	assert.GreaterOrEqual(t, len(result.Items), 2)
 }
@@ -152,8 +155,8 @@ func TestTruncate(t *testing.T) {
 	assert.Len(t, []rune(result), 21)
 }
 
-// Test that saved items are properly deduplicated via storage.
-func TestFetchAll_DedupViaStorage(t *testing.T) {
+// TestFetchAll_SinceFiltering verifies that the since parameter controls the fetch window.
+func TestFetchAll_SinceFiltering(t *testing.T) {
 	server := testServer()
 	defer server.Close()
 
@@ -162,7 +165,6 @@ func TestFetchAll_DedupViaStorage(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 
-	// First fetch - saves items to storage
 	cfg := config.RSSConfig{
 		Feeds:           []string{server.URL},
 		MaxItemsPerFeed: 50,
@@ -171,18 +173,15 @@ func TestFetchAll_DedupViaStorage(t *testing.T) {
 	}
 	f := New(cfg, store)
 
-	result1, err := f.FetchAll(ctx)
+	// since = 24h ago: should get both recent items
+	result1, err := f.FetchAll(ctx, time.Now().Add(-24*time.Hour))
 	require.NoError(t, err)
 	assert.Len(t, result1.Items, 2)
 
-	// Save items
-	err = f.SaveAndCleanup(ctx, result1.Items)
+	// since = 3h ago: only item published 2h ago should match (not the 4h one)
+	result2, err := f.FetchAll(ctx, time.Now().Add(-3*time.Hour))
 	require.NoError(t, err)
-
-	// Second fetch - items should be deduped
-	result2, err := f.FetchAll(ctx)
-	require.NoError(t, err)
-	assert.Len(t, result2.Items, 0) // All deduped
+	assert.Len(t, result2.Items, 1)
 }
 
 // TestFetchLocalFile verifies that a local RSS XML file can be loaded.
@@ -205,7 +204,7 @@ func TestFetchLocalFile(t *testing.T) {
 	}
 	f := New(cfg, store)
 
-	items, err := f.fetchSingle(ctx, localPath)
+	items, err := f.fetchSingle(ctx, localPath, time.Now().Add(-24*time.Hour))
 	require.NoError(t, err)
 	assert.Len(t, items, 2) // Old news filtered out
 
@@ -230,6 +229,6 @@ func TestFetchLocalFile_NotFound(t *testing.T) {
 	}
 	f := New(cfg, store)
 
-	_, err = f.fetchSingle(ctx, "/no/such/path/feed.xml")
+	_, err = f.fetchSingle(ctx, "/no/such/path/feed.xml", time.Now().Add(-24*time.Hour))
 	assert.Error(t, err)
 }

@@ -19,6 +19,7 @@ type RankedNewsItem struct {
 	Summary     string    `json:"summary"`
 	Link        string    `json:"link"`
 	PublishedAt time.Time `json:"published_at"`
+	Source      string    `json:"source"`
 }
 
 // Subscriber represents a Telegram subscriber.
@@ -32,7 +33,8 @@ type Subscriber struct {
 type DigestRun struct {
 	ID        int       `json:"id"`
 	RunAt     time.Time `json:"run_at"`
-	Status    string    `json:"status"` // success, failed, fallback
+	Status    string    `json:"status"`  // success, failed, fallback
+	Trigger   string    `json:"trigger"` // cron, command
 	ItemCount int       `json:"item_count"`
 	LLMUsed   bool      `json:"llm_used"`
 	ErrorMsg  string    `json:"error_msg,omitempty"`

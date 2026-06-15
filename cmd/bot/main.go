@@ -46,7 +46,7 @@ func main() {
 	}
 
 	// Initialize formatter
-	fmttr := formatter.New(formatter.ParseMode(cfg.Bot.ParseMode))
+	fmttr := formatter.New(formatter.ParseMode(cfg.Bot.ParseMode), cfg.App.DigestTopN)
 
 	// Initialize LLM client
 	llmClient := llm.New(cfg.LLM, logger)
@@ -55,12 +55,14 @@ func main() {
 	rssFetcher := rss.New(cfg.RSS, store)
 
 	// Pipeline: fetch RSS → rank with LLM → save → return ranked items
-	runPipeline := buildPipeline(logger, store, rssFetcher, llmClient)
+	runPipeline := buildPipeline(logger, store, rssFetcher, llmClient, cfg.App.DigestTopN)
 
 	// Initialize bot — use a pointer so the broadcastFn can reference it
 	var botRef *bot.Bot
 	botRef, err = bot.New(cfg.Bot, fmttr, store, func(ctx context.Context) error {
-		_, ranked, err := runPipeline(ctx)
+		// /digest command uses the same window as the next scheduled cron:
+		// fetch news since the last cron run.
+		_, ranked, err := runPipeline(ctx, "command")
 		if err != nil {
 			return err
 		}
@@ -89,9 +91,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Schedule daily digest: same broadcast function
+	// Schedule daily digest.
 	if err := sched.AddJob(cfg.Schedule.Cron, func(ctx context.Context) error {
-		_, ranked, err := runPipeline(ctx)
+		_, ranked, err := runPipeline(ctx, "cron")
 		if err != nil {
 			return err
 		}
@@ -107,28 +109,24 @@ func main() {
 
 	sched.Start()
 
-	// Periodic cleanup of old digest run records (daily, older than 7 days)
+	// Periodic cleanup of old records (daily, older than 30 days).
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 
-		// Run cleanup on startup
-		n, err := store.CleanupOldDigestRuns(ctx, 7*24*time.Hour)
-		if err != nil {
-			logger.Warn("cleanup: old digest runs", slog.String("error", err.Error()))
-		} else if n > 0 {
-			logger.Info("cleanup: removed old digest runs", slog.Int("count", n))
+		runCleanup := func() {
+			if n, err := store.CleanupOldDigestRuns(ctx, 30*24*time.Hour); err != nil {
+				logger.Warn("cleanup: old digest runs", slog.String("error", err.Error()))
+			} else if n > 0 {
+				logger.Info("cleanup: removed old digest runs", slog.Int("count", n))
+			}
 		}
 
+		runCleanup()
 		for {
 			select {
 			case <-ticker.C:
-				n, err := store.CleanupOldDigestRuns(ctx, 7*24*time.Hour)
-				if err != nil {
-					logger.Warn("cleanup: old digest runs", slog.String("error", err.Error()))
-				} else if n > 0 {
-					logger.Info("cleanup: removed old digest runs", slog.Int("count", n))
-				}
+				runCleanup()
 			case <-ctx.Done():
 				return
 			}
@@ -165,17 +163,26 @@ func main() {
 }
 
 // buildPipeline creates the digest pipeline: fetch RSS → rank with LLM → save.
+// trigger is "cron" or "command". Only cron runs advance the window for future fetches.
 func buildPipeline(
 	logger *slog.Logger,
 	store *storage.Store,
 	rssFetcher *rss.Fetcher,
 	llmClient *llm.Client,
-) func(ctx context.Context) (*models.DigestRun, []models.RankedNewsItem, error) {
-	return func(ctx context.Context) (*models.DigestRun, []models.RankedNewsItem, error) {
-		logger.Info("pipeline: starting digest run")
+	topN int,
+) func(ctx context.Context, trigger string) (*models.DigestRun, []models.RankedNewsItem, error) {
+	return func(ctx context.Context, trigger string) (*models.DigestRun, []models.RankedNewsItem, error) {
+		logger.Info("pipeline: starting digest run", slog.String("trigger", trigger))
 
-		// 1. Fetch RSS
-		fetchResult, err := rssFetcher.FetchAll(ctx)
+		// 1. Compute fetch window: since last cron run, default to last 24h.
+		since := time.Now().Add(-24 * time.Hour)
+		if lastCron, err := store.GetLastCronRun(ctx); err == nil && lastCron != nil {
+			since = *lastCron
+		}
+		logger.Info("pipeline: fetch window", slog.Time("since", since))
+
+		// 2. Fetch RSS
+		fetchResult, err := rssFetcher.FetchAll(ctx, since)
 		if err != nil {
 			return nil, nil, fmt.Errorf("pipeline: fetch: %w", err)
 		}
@@ -191,16 +198,17 @@ func buildPipeline(
 			run := &models.DigestRun{
 				RunAt:     time.Now(),
 				Status:    "success",
+				Trigger:   trigger,
 				ItemCount: 0,
 				LLMUsed:   false,
 			}
-			if err := store.SaveDigestRun(ctx, *run); err != nil {
+			if _, err := store.SaveDigestRun(ctx, *run); err != nil {
 				logger.Warn("pipeline: save run record failed", slog.String("error", err.Error()))
 			}
 			return run, nil, nil
 		}
 
-		// 2. Save items
+		// 3. Save items for health monitoring
 		if err := rssFetcher.SaveAndCleanup(ctx, fetchResult.Items); err != nil {
 			logger.Warn("pipeline: save items failed",
 				slog.String("error", err.Error()),
@@ -208,18 +216,18 @@ func buildPipeline(
 			)
 		}
 
-		// 3. Rank with LLM
-		ranked, llmUsed, err := llmClient.RankWithLLM(ctx, fetchResult.Items)
+		// 4. Rank with LLM
+		ranked, llmUsed, err := llmClient.RankWithLLM(ctx, fetchResult.Items, topN)
 		if err != nil {
 			logger.Error("pipeline: rank failed", slog.String("error", err.Error()))
 			run := &models.DigestRun{
-				RunAt:     time.Now(),
-				Status:    "failed",
-				ItemCount: 0,
-				LLMUsed:   false,
-				ErrorMsg:  err.Error(),
+				RunAt:    time.Now(),
+				Status:   "failed",
+				Trigger:  trigger,
+				LLMUsed:  false,
+				ErrorMsg: err.Error(),
 			}
-			store.SaveDigestRun(ctx, *run)
+			store.SaveDigestRun(ctx, *run) //nolint:errcheck
 			return run, nil, err
 		}
 
@@ -233,14 +241,15 @@ func buildPipeline(
 			slog.Bool("llm_used", llmUsed),
 		)
 
-		// 4. Save digest run record
+		// 5. Save digest run record.
 		run := &models.DigestRun{
 			RunAt:     time.Now(),
 			Status:    runStatus,
+			Trigger:   trigger,
 			ItemCount: len(ranked),
 			LLMUsed:   llmUsed,
 		}
-		if err := store.SaveDigestRun(ctx, *run); err != nil {
+		if _, err := store.SaveDigestRun(ctx, *run); err != nil {
 			logger.Warn("pipeline: save run record failed", slog.String("error", err.Error()))
 		}
 

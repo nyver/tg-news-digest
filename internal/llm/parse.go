@@ -3,6 +3,7 @@ package llm
 import (
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -18,25 +19,26 @@ var (
 
 // parseLLMResponse extracts ranked news items from the LLM's free-text response.
 // It tries to match numbered items and extract title, summary, and URL.
-// If parsing fails, falls back to raw top-10 by date.
-func parseLLMResponse(response string, originalItems []models.NewsItem) ([]models.RankedNewsItem, error) {
+// If parsing fails, falls back to raw top-N by date.
+func parseLLMResponse(response string, originalItems []models.NewsItem, topN int) ([]models.RankedNewsItem, error) {
 	response = strings.TrimSpace(response)
 	if response == "" {
 		return nil, fmt.Errorf("llm: empty response")
 	}
 
 	// Try structured parsing first
-	ranked := tryParseStructured(response)
+	ranked := tryParseStructured(response, topN)
 	if len(ranked) > 0 {
-		return ranked, nil
+		return enrichRankedItems(ranked, originalItems), nil
 	}
 
 	// Fallback: use the original items sorted by date when parse fails
-	slog.Warn("llm: structured parse returned 0 items, falling back to raw top-10",
+	slog.Warn("llm: structured parse returned 0 items, falling back to raw top-N",
 		slog.String("response_sample", truncateForLog(response, 200)),
 		slog.Int("available_items", len(originalItems)),
+		slog.Int("top_n", topN),
 	)
-	return createFallback(originalItems), nil
+	return createFallback(originalItems, topN), nil
 }
 
 // truncateForLog truncates a string to maxLen for safe logging output.
@@ -48,7 +50,7 @@ func truncateForLog(s string, maxLen int) string {
 }
 
 // tryParseStructured attempts to parse the LLM response into RankedNewsItem slices.
-func tryParseStructured(response string) []models.RankedNewsItem {
+func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 	lines := strings.Split(response, "\n")
 	if len(lines) == 0 {
 		return nil
@@ -129,9 +131,9 @@ func tryParseStructured(response string) []models.RankedNewsItem {
 		})
 	}
 
-	// Limit to top 10
-	if len(ranked) > 10 {
-		ranked = ranked[:10]
+	// Limit to topN
+	if len(ranked) > topN {
+		ranked = ranked[:topN]
 	}
 
 	// Re-rank sequentially
@@ -142,9 +144,9 @@ func tryParseStructured(response string) []models.RankedNewsItem {
 	return ranked
 }
 
-// createFallback generates top-N (up to 10) ranked items from the original list
+// createFallback generates top-N ranked items from the original list
 // sorted by publication time (most recent first).
-func createFallback(items []models.NewsItem) []models.RankedNewsItem {
+func createFallback(items []models.NewsItem, topN int) []models.RankedNewsItem {
 	if len(items) == 0 {
 		return nil
 	}
@@ -153,7 +155,7 @@ func createFallback(items []models.NewsItem) []models.RankedNewsItem {
 	copy(sorted, items)
 	sortItemsByDate(sorted)
 
-	maxN := 10
+	maxN := topN
 	if len(sorted) < maxN {
 		maxN = len(sorted)
 	}
@@ -164,7 +166,6 @@ func createFallback(items []models.NewsItem) []models.RankedNewsItem {
 		if desc == "" {
 			desc = "Подробнее по ссылке"
 		}
-		// Truncate for Telegram message length
 		if len([]rune(desc)) > 200 {
 			desc = truncateRunes(desc, 200) + "…"
 		}
@@ -174,10 +175,45 @@ func createFallback(items []models.NewsItem) []models.RankedNewsItem {
 			Summary:     desc,
 			Link:        sorted[i].Link,
 			PublishedAt: sorted[i].PublishedAt,
+			Source:      extractSourceName(sorted[i].FeedURL),
 		}
 	}
 
 	return result
+}
+
+// enrichRankedItems fills PublishedAt and Source on ranked items by matching
+// their links back to the original RSS items.
+func enrichRankedItems(ranked []models.RankedNewsItem, originals []models.NewsItem) []models.RankedNewsItem {
+	byURL := make(map[string]models.NewsItem, len(originals))
+	for _, item := range originals {
+		byURL[item.Link] = item
+	}
+	for i := range ranked {
+		orig, ok := byURL[ranked[i].Link]
+		if !ok {
+			continue
+		}
+		if ranked[i].PublishedAt.IsZero() {
+			ranked[i].PublishedAt = orig.PublishedAt
+		}
+		if ranked[i].Source == "" {
+			ranked[i].Source = extractSourceName(orig.FeedURL)
+		}
+	}
+	return ranked
+}
+
+// extractSourceName returns the hostname from a feed URL, stripping "www.".
+func extractSourceName(feedURL string) string {
+	if feedURL == "" {
+		return ""
+	}
+	u, err := url.Parse(feedURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.TrimPrefix(u.Host, "www.")
 }
 
 // sortItemsByDate sorts items in-place by PublishedAt descending (most recent first).

@@ -54,7 +54,7 @@ func TestRankWithLLM_Success(t *testing.T) {
 		{ID: "2", Title: "Title 2", Description: "Desc 2", Link: "https://example.com/2", PublishedAt: time.Now().Add(-2 * time.Hour)},
 	}
 
-	ranked, llmUsed, err := client.RankWithLLM(context.Background(), items)
+	ranked, llmUsed, err := client.RankWithLLM(context.Background(), items, 10)
 	if err != nil {
 		t.Fatalf("RankWithLLM error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestRankWithLLM_ServerError_Fallback(t *testing.T) {
 		{ID: "2", Title: "Title 2", Description: "Desc 2", Link: "https://example.com/2", PublishedAt: time.Now().Add(-2 * time.Hour)},
 	}
 
-	ranked, llmUsed, err := client.RankWithLLM(context.Background(), items)
+	ranked, llmUsed, err := client.RankWithLLM(context.Background(), items, 10)
 	if err != nil {
 		t.Fatalf("RankWithLLM should not error on fallback: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestRankWithLLM_EmptyItems(t *testing.T) {
 	}
 	client := New(cfg, slog.Default())
 
-	ranked, llmUsed, err := client.RankWithLLM(context.Background(), nil)
+	ranked, llmUsed, err := client.RankWithLLM(context.Background(), nil, 10)
 	if err != nil {
 		t.Fatalf("RankWithLLM error: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestRankWithLLM_EmptyResponse_Fallback(t *testing.T) {
 		{ID: "1", Title: "Title 1", Description: "Desc 1", Link: "https://example.com/1", PublishedAt: time.Now()},
 	}
 
-	ranked, llmUsed, _ := client.RankWithLLM(context.Background(), items)
+	ranked, llmUsed, _ := client.RankWithLLM(context.Background(), items, 10)
 	if llmUsed {
 		t.Error("expected llmUsed=false for empty response")
 	}

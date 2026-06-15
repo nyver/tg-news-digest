@@ -8,10 +8,10 @@ import (
 )
 
 // buildUserPrompt assembles the user message with the list of news items.
-func buildUserPrompt(items []models.NewsItem, dateStr string) string {
+func buildUserPrompt(items []models.NewsItem, dateStr string, topN int) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("Ты — опытный новостной редактор. Выбери ровно 10 самых важных новостей за %s из списка ниже.\n\n", dateStr))
+	sb.WriteString(fmt.Sprintf("Ты — опытный новостной редактор. Выбери ровно %d самых важных новостей за %s из списка ниже.\n\n", topN, dateStr))
 	sb.WriteString("Критерии важности новости (в порядке приоритета):\n")
 	sb.WriteString("1. Глобальный масштаб влияния — затрагивает множество людей или стран\n")
 	sb.WriteString("2. Актуальность — произошло недавно, имеет прямое отношение к текущей повестке\n")
