@@ -188,10 +188,6 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	case "unsubscribe":
 		b.cmdUnsubscribe(ctx, chatID, msg)
 	case "digest":
-		if chatID != b.ownerID {
-			b.reply(ctx, msg, "❌ Только для владельца бота.")
-			return
-		}
 		b.cmdDigest(ctx, msg)
 	case "status":
 		b.cmdStatus(ctx, chatID, msg)
@@ -218,11 +214,33 @@ func (b *Bot) cmdUnsubscribe(ctx context.Context, chatID int64, msg *tgbotapi.Me
 	b.reply(ctx, msg, formatter.UnsubscribedMessage(formatter.ParseMode(b.cfg.ParseMode)))
 }
 
-// cmdDigest triggers a manual digest run (owner only).
+// cmdDigest subscribes the caller if not already subscribed, then triggers a
+// full digest run if the caller is the owner.
 func (b *Bot) cmdDigest(ctx context.Context, msg *tgbotapi.Message) {
+	chatID := msg.Chat.ID
+
+	// Auto-subscribe the user if they are not yet subscribed.
+	active, err := b.store.IsActive(ctx, chatID)
+	if err != nil {
+		b.logger.Warn("bot: digest: check subscriber failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
+	if !active {
+		if err := b.store.SaveSubscriber(ctx, chatID); err != nil {
+			b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка подписки: %v", err))
+			return
+		}
+		b.reply(ctx, msg, formatter.SubscribedMessage(formatter.ParseMode(b.cfg.ParseMode)))
+	}
+
+	// Only the owner can trigger the pipeline.
+	if chatID != b.ownerID {
+		return
+	}
+
 	b.reply(ctx, msg, "⏳ Генерация дайджеста...")
 
-	err := b.broadcastFn(ctx)
+	err = b.broadcastFn(ctx)
 	if err != nil {
 		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка генерации: %v", err))
 		return
