@@ -190,6 +190,101 @@ func TestBroadcast_RateLimit(t *testing.T) {
 	mockAPI.AssertExpectations(t)
 }
 
+func TestBroadcast_CategoryFiltering(t *testing.T) {
+	ctx := context.Background()
+	mockAPI := new(mockTGAPI)
+	store := newTestStore(t)
+
+	// Chat 100 wants only AI news; chat 200 has no preference (gets everything).
+	require.NoError(t, store.SaveSubscriber(ctx, 100))
+	require.NoError(t, store.SaveSubscriber(ctx, 200))
+	require.NoError(t, store.AddSubscriberCategory(ctx, 100, "AI"))
+
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
+	require.NoError(t, err)
+
+	items := []models.RankedNewsItem{
+		{Rank: 1, Title: "AI news", Summary: "S", Link: "https://x.com/1", Category: "AI"},
+		{Rank: 2, Title: "Sports news", Summary: "S", Link: "https://x.com/2", Category: "Sports"},
+	}
+
+	var sentToChat100, sentToChat200 int
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		msg, ok := c.(tgbotapi.MessageConfig)
+		if ok && msg.ChatID == 100 {
+			sentToChat100++
+		}
+		if ok && msg.ChatID == 200 {
+			sentToChat200++
+		}
+		return ok
+	})).Return(tgbotapi.Message{}, nil)
+
+	err = bot.Broadcast(ctx, items, time.Now())
+	require.NoError(t, err)
+
+	// Chat 100 (AI only) gets a single part with just the AI item.
+	assert.Equal(t, 1, sentToChat100)
+	// Chat 200 (no filter) gets the full digest in one part too.
+	assert.Equal(t, 1, sentToChat200)
+}
+
+func TestBroadcast_CategoryFiltering_NoMatch_SkipsChat(t *testing.T) {
+	ctx := context.Background()
+	mockAPI := new(mockTGAPI)
+	store := newTestStore(t)
+
+	require.NoError(t, store.SaveSubscriber(ctx, 100))
+	require.NoError(t, store.AddSubscriberCategory(ctx, 100, "Sports"))
+
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
+	require.NoError(t, err)
+
+	items := []models.RankedNewsItem{
+		{Rank: 1, Title: "AI news", Summary: "S", Link: "https://x.com/1", Category: "AI"},
+	}
+
+	err = bot.Broadcast(ctx, items, time.Now())
+	require.NoError(t, err)
+	mockAPI.AssertNotCalled(t, "Send", mock.Anything)
+}
+
+func TestHandleCallback_TogglesCategory(t *testing.T) {
+	ctx := context.Background()
+	mockAPI := new(mockTGAPI)
+	store := newTestStore(t)
+
+	cfg := config.BotConfig{Categories: []string{"AI", "LLM"}}
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(mockAPI, cfg, fmttr, store, nil, slog.Default())
+	require.NoError(t, err)
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	cq := &tgbotapi.CallbackQuery{
+		ID:   "cbid",
+		Data: "cat:AI",
+		Message: &tgbotapi.Message{
+			MessageID: 1,
+			Chat:      &tgbotapi.Chat{ID: 42},
+		},
+	}
+
+	bot.handleCallback(ctx, cq)
+
+	cats, err := store.GetSubscriberCategories(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"AI"}, cats)
+
+	// Pressing again toggles it off.
+	bot.handleCallback(ctx, cq)
+	cats, err = store.GetSubscriberCategories(ctx, 42)
+	require.NoError(t, err)
+	assert.Empty(t, cats)
+}
+
 func TestBroadcast_ConcurrentSafe(t *testing.T) {
 	ctx := context.Background()
 	mockAPI := new(mockTGAPI)

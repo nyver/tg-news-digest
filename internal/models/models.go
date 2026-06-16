@@ -20,6 +20,7 @@ type RankedNewsItem struct {
 	Link        string    `json:"link"`
 	PublishedAt time.Time `json:"published_at"`
 	Source      string    `json:"source"`
+	Category    string    `json:"category,omitempty"`
 }
 
 // Subscriber represents a Telegram subscriber.

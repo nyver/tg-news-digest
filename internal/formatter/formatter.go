@@ -176,6 +176,9 @@ func DigestBody(items []models.RankedNewsItem, mode ParseMode) string {
 // buildMeta returns a "source • date" metadata string for an item, or "" if both are absent.
 func buildMeta(item models.RankedNewsItem, mode ParseMode) string {
 	var parts []string
+	if item.Category != "" {
+		parts = append(parts, item.Category)
+	}
 	if item.Source != "" {
 		parts = append(parts, item.Source)
 	}
@@ -225,13 +228,15 @@ func StartMessage(mode ParseMode) string {
 	case HTML:
 		return `<b>Привет! Я бот дайджеста новостей.</b>
 Отправь <code>/subscribe</code> чтобы подписаться на ежедневный дайджест.
-Отправь <code>/unsubscribe</code> чтобы отписаться.`
+Отправь <code>/unsubscribe</code> чтобы отписаться.
+Отправь <code>/categories</code> чтобы выбрать интересующие темы.`
 	case MarkdownV2:
 		return `*Привет! Я бот дайджеста новостей.*
 Отправь /subscribe чтобы подписаться на ежедневный дайджест.
-Отправь /unsubscribe чтобы отписаться.`
+Отправь /unsubscribe чтобы отписаться.
+Отправь /categories чтобы выбрать интересующие темы.`
 	default:
-		return "Привет! Я бот дайджеста новостей.\n\nОтправь /subscribe чтобы подписаться на ежедневный дайджест.\nОтправь /unsubscribe чтобы отписаться."
+		return "Привет! Я бот дайджеста новостей.\n\nОтправь /subscribe чтобы подписаться на ежедневный дайджест.\nОтправь /unsubscribe чтобы отписаться.\nОтправь /categories чтобы выбрать интересующие темы."
 	}
 }
 

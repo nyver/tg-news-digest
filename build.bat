@@ -1,0 +1,1 @@
+go build -o ./bot.exe ./cmd/bot

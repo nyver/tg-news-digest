@@ -81,6 +81,11 @@ func (s *Store) migrate(ctx context.Context) error {
 			expires_at DATETIME NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_fetched_items_expires ON fetched_items(expires_at)`,
+		`CREATE TABLE IF NOT EXISTS subscriber_categories (
+			chat_id INTEGER NOT NULL,
+			category TEXT NOT NULL,
+			PRIMARY KEY (chat_id, category)
+		)`,
 		`CREATE TABLE IF NOT EXISTS digest_runs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			run_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -155,6 +160,48 @@ func (s *Store) GetActiveChats(ctx context.Context) ([]int64, error) {
 		chats = append(chats, chatID)
 	}
 	return chats, rows.Err()
+}
+
+// --- Subscriber category preference methods ---
+
+// AddSubscriberCategory marks a chat as interested in the given category.
+func (s *Store) AddSubscriberCategory(ctx context.Context, chatID int64, category string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO subscriber_categories (chat_id, category) VALUES (?, ?)`,
+		chatID, category,
+	)
+	return err
+}
+
+// RemoveSubscriberCategory removes a chat's interest in the given category.
+func (s *Store) RemoveSubscriberCategory(ctx context.Context, chatID int64, category string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM subscriber_categories WHERE chat_id = ? AND category = ?`,
+		chatID, category,
+	)
+	return err
+}
+
+// GetSubscriberCategories returns the categories a chat has selected.
+// An empty result means the subscriber receives the full, unfiltered digest.
+func (s *Store) GetSubscriberCategories(ctx context.Context, chatID int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT category FROM subscriber_categories WHERE chat_id = ? ORDER BY category`, chatID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var categories []string
+	for rows.Next() {
+		var category string
+		if err := rows.Scan(&category); err != nil {
+			return nil, err
+		}
+		categories = append(categories, category)
+	}
+	return categories, rows.Err()
 }
 
 // --- FetchedItem methods ---

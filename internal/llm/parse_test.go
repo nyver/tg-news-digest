@@ -21,7 +21,7 @@ func TestParseLLMResponse_Valid(t *testing.T) {
 		{ID: "1", Title: "Title 1", Link: "https://example.com/1"},
 	}
 
-	ranked, err := parseLLMResponse(response, items, 10)
+	ranked, err := parseLLMResponse(response, items, 10, nil)
 	if err != nil {
 		t.Fatalf("parseLLMResponse error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestParseLLMResponse_LimitedTo10(t *testing.T) {
 	}
 
 	items := []models.NewsItem{}
-	ranked, err := parseLLMResponse(response.String(), items, 10)
+	ranked, err := parseLLMResponse(response.String(), items, 10, nil)
 	if err != nil {
 		t.Fatalf("parseLLMResponse error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestParseLLMResponse_LimitedTo10(t *testing.T) {
 
 func TestParseLLMResponse_Empty(t *testing.T) {
 	items := []models.NewsItem{{ID: "1", Title: "T", Link: "http://x"}}
-	_, err := parseLLMResponse("", items, 10)
+	_, err := parseLLMResponse("", items, 10, nil)
 	if err == nil {
 		t.Error("expected error for empty response")
 	}
@@ -75,12 +75,88 @@ func TestParseLLMResponse_NoNumberedItems(t *testing.T) {
 
 	// parseLLMResponse now returns an error when structured parse yields 0 items;
 	// the caller (RankWithLLM) is responsible for calling createFallback with llmUsed=false.
-	ranked, err := parseLLMResponse(response, items, 10)
+	ranked, err := parseLLMResponse(response, items, 10, nil)
 	if err == nil {
 		t.Fatal("expected error when response has no numbered items")
 	}
 	if ranked != nil {
 		t.Errorf("expected nil ranked on parse error, got %d items", len(ranked))
+	}
+}
+
+func TestParseLLMResponse_WithCategory(t *testing.T) {
+	response := `1. Новая модель GPT
+   Описание про языковую модель. URL: https://example.com/1
+   Категория: LLM
+2. Релиз Linux ядра
+   Описание про разработку. URL: https://example.com/2
+   Категория: IT`
+
+	items := []models.NewsItem{}
+	categories := []string{"AI", "LLM", "Программирование", "IT"}
+
+	ranked, err := parseLLMResponse(response, items, 10, categories)
+	if err != nil {
+		t.Fatalf("parseLLMResponse error: %v", err)
+	}
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(ranked))
+	}
+	if ranked[0].Category != "LLM" {
+		t.Errorf("expected category LLM, got %q", ranked[0].Category)
+	}
+	if ranked[1].Category != "IT" {
+		t.Errorf("expected category IT, got %q", ranked[1].Category)
+	}
+	if strings.Contains(ranked[0].Summary, "Категория") {
+		t.Errorf("category line leaked into summary: %q", ranked[0].Summary)
+	}
+}
+
+func TestParseLLMResponse_InvalidCategory_FallsBackToKeyword(t *testing.T) {
+	response := `1. Новая большая языковая модель GPT представлена компанией
+   Подробности о llm модели. URL: https://example.com/1
+   Категория: Развлечения`
+
+	categories := []string{"AI", "LLM", "Программирование", "IT"}
+
+	ranked, err := parseLLMResponse(response, nil, 10, categories)
+	if err != nil {
+		t.Fatalf("parseLLMResponse error: %v", err)
+	}
+	if len(ranked) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(ranked))
+	}
+	if ranked[0].Category != "LLM" {
+		t.Errorf("expected keyword-classified category LLM, got %q", ranked[0].Category)
+	}
+}
+
+func TestClassifyCategory(t *testing.T) {
+	categories := []string{"AI", "LLM", "Программирование", "IT"}
+
+	if got := classifyCategory("Вышла новая языковая модель Gemini", "", categories); got != "LLM" {
+		t.Errorf("expected LLM, got %q", got)
+	}
+	if got := classifyCategory("Разработчики выложили код на GitHub", "", categories); got != "Программирование" {
+		t.Errorf("expected Программирование, got %q", got)
+	}
+	if got := classifyCategory("Совершенно не по теме", "", categories); got != "" {
+		t.Errorf("expected no match, got %q", got)
+	}
+}
+
+func TestMatchCategory(t *testing.T) {
+	categories := []string{"AI", "LLM", "Программирование", "IT"}
+
+	if got := matchCategory("llm", categories); got != "LLM" {
+		t.Errorf("expected case-insensitive match LLM, got %q", got)
+	}
+	if got := matchCategory("Развлечения", categories); got != "" {
+		t.Errorf("expected no match for unknown category, got %q", got)
+	}
+	if got := matchCategory("", categories); got != "" {
+		t.Errorf("expected empty for empty candidate, got %q", got)
 	}
 }
 
@@ -91,7 +167,7 @@ func TestCreateFallback(t *testing.T) {
 		{ID: "3", Title: "Mid", Link: "http://c", PublishedAt: time.Now().Add(-3 * time.Hour)},
 	}
 
-	fb := createFallback(items, 10)
+	fb := createFallback(items, 10, nil)
 	if len(fb) != 3 {
 		t.Fatalf("expected 3 fallback items, got %d", len(fb))
 	}
@@ -108,7 +184,7 @@ func TestCreateFallback(t *testing.T) {
 }
 
 func TestCreateFallback_Empty(t *testing.T) {
-	fb := createFallback(nil, 10)
+	fb := createFallback(nil, 10, nil)
 	if fb != nil {
 		t.Errorf("expected nil for empty input, got %d items", len(fb))
 	}
@@ -125,7 +201,7 @@ func TestCreateFallback_Limit10(t *testing.T) {
 		})
 	}
 
-	fb := createFallback(items, 10)
+	fb := createFallback(items, 10, nil)
 	if len(fb) != 10 {
 		t.Errorf("expected 10 fallback items, got %d", len(fb))
 	}

@@ -11,11 +11,12 @@ import (
 
 // Config holds the entire application configuration.
 type Config struct {
-	Bot      BotConfig      `mapstructure:"bot"`
-	RSS      RSSConfig      `mapstructure:"rss"`
-	LLM      LLMConfig      `mapstructure:"llm"`
-	Schedule ScheduleConfig `mapstructure:"schedule"`
-	App      AppConfig      `mapstructure:"app"`
+	Bot        BotConfig      `mapstructure:"bot"`
+	RSS        RSSConfig      `mapstructure:"rss"`
+	LLM        LLMConfig      `mapstructure:"llm"`
+	Schedule   ScheduleConfig `mapstructure:"schedule"`
+	App        AppConfig      `mapstructure:"app"`
+	Categories []string       `mapstructure:"categories"`
 }
 
 type MTProxyConfig struct {
@@ -30,6 +31,7 @@ type BotConfig struct {
 	ParseMode   string        `mapstructure:"parse_mode"` // HTML or MarkdownV2
 	OwnerChatID int64         `mapstructure:"owner_chat_id"`
 	MTProxy     MTProxyConfig `mapstructure:"mtproxy"`
+	Categories  []string      `mapstructure:"-"` // populated from top-level Config.Categories by Validate
 }
 
 type RSSConfig struct {
@@ -48,6 +50,7 @@ type LLMConfig struct {
 	MaxTokens     int           `mapstructure:"max_tokens"`
 	ContextWindow int           `mapstructure:"context_window"`
 	Timeout       time.Duration `mapstructure:"timeout"`
+	Categories    []string      `mapstructure:"-"` // populated from top-level Config.Categories by Validate
 }
 
 type ScheduleConfig struct {
@@ -169,6 +172,11 @@ func Validate(cfg *Config) error {
 	if cfg.Schedule.Timezone == "" {
 		cfg.Schedule.Timezone = "Europe/Moscow"
 	}
+	if len(cfg.Categories) == 0 {
+		cfg.Categories = []string{"AI", "LLM", "Программирование", "IT"}
+	}
+	cfg.LLM.Categories = cfg.Categories
+	cfg.Bot.Categories = cfg.Categories
 
 	// Validate parse_mode
 	switch cfg.Bot.ParseMode {

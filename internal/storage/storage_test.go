@@ -189,3 +189,51 @@ func TestGetLastRun_NoRuns(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, last)
 }
+
+func TestSubscriberCategories_DefaultEmpty(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	cats, err := s.GetSubscriberCategories(ctx, 555)
+	require.NoError(t, err)
+	assert.Empty(t, cats)
+}
+
+func TestSubscriberCategories_AddRemove(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.AddSubscriberCategory(ctx, 555, "AI"))
+	require.NoError(t, s.AddSubscriberCategory(ctx, 555, "IT"))
+
+	cats, err := s.GetSubscriberCategories(ctx, 555)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"AI", "IT"}, cats)
+
+	// Re-adding the same category is idempotent.
+	require.NoError(t, s.AddSubscriberCategory(ctx, 555, "AI"))
+	cats, err = s.GetSubscriberCategories(ctx, 555)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"AI", "IT"}, cats)
+
+	require.NoError(t, s.RemoveSubscriberCategory(ctx, 555, "AI"))
+	cats, err = s.GetSubscriberCategories(ctx, 555)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"IT"}, cats)
+}
+
+func TestSubscriberCategories_ScopedPerChat(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.AddSubscriberCategory(ctx, 1, "AI"))
+	require.NoError(t, s.AddSubscriberCategory(ctx, 2, "LLM"))
+
+	cats1, err := s.GetSubscriberCategories(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"AI"}, cats1)
+
+	cats2, err := s.GetSubscriberCategories(ctx, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"LLM"}, cats2)
+}

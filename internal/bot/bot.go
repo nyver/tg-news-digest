@@ -36,6 +36,7 @@ type Bot struct {
 	broadcastFn BroadcastFunc
 	logger      *slog.Logger
 	ownerID     int64
+	categories  []string
 }
 
 // New creates a new Bot.
@@ -53,6 +54,7 @@ func New(cfg config.BotConfig, fmttr *formatter.Formatter, store *storage.Store,
 		broadcastFn: broadcastFn,
 		logger:      logger,
 		ownerID:     cfg.OwnerChatID,
+		categories:  cfg.Categories,
 	}, nil
 }
 
@@ -99,6 +101,7 @@ func NewWithAPI(api TGAPI, cfg config.BotConfig, fmttr *formatter.Formatter, sto
 		broadcastFn: broadcastFn,
 		logger:      logger,
 		ownerID:     cfg.OwnerChatID,
+		categories:  cfg.Categories,
 	}, nil
 }
 
@@ -133,6 +136,11 @@ func (b *Bot) poll(ctx context.Context, updates tgbotapi.UpdatesChannel) error {
 
 // handleUpdate processes a single Telegram update.
 func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+	if update.CallbackQuery != nil {
+		b.handleCallback(ctx, update.CallbackQuery)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}
@@ -191,6 +199,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.cmdDigest(ctx, msg)
 	case "status":
 		b.cmdStatus(ctx, chatID, msg)
+	case "categories":
+		b.cmdCategories(ctx, chatID, msg)
 	default:
 		b.reply(ctx, msg, formatter.UnknownCommandMessage(formatter.ParseMode(b.cfg.ParseMode)))
 	}
@@ -248,6 +258,102 @@ func (b *Bot) cmdDigest(ctx context.Context, msg *tgbotapi.Message) {
 	b.reply(ctx, msg, "✅ Дайджест успешно отправлен подписчикам.")
 }
 
+// cmdCategories shows the category selection keyboard for the chat.
+func (b *Bot) cmdCategories(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
+	selected, err := b.store.GetSubscriberCategories(ctx, chatID)
+	if err != nil {
+		b.logger.Warn("bot: get subscriber categories failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
+
+	cfg := tgbotapi.NewMessage(chatID,
+		"📂 Выберите интересующие категории новостей (нажмите, чтобы включить/выключить).\nЕсли ничего не выбрано — вы получаете дайджест по всем темам.")
+	cfg.ReplyMarkup = b.buildCategoriesKeyboard(selected)
+	cfg.ReplyToMessageID = msg.MessageID
+
+	if _, err := b.api.Send(cfg); err != nil {
+		b.logger.Error("bot: send categories keyboard failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
+}
+
+// buildCategoriesKeyboard renders one toggle button per configured category,
+// marking the ones the chat currently has selected.
+func (b *Bot) buildCategoriesKeyboard(selected []string) tgbotapi.InlineKeyboardMarkup {
+	selectedSet := make(map[string]bool, len(selected))
+	for _, c := range selected {
+		selectedSet[strings.ToLower(c)] = true
+	}
+
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(b.categories))
+	for _, cat := range b.categories {
+		label := "⬜ " + cat
+		if selectedSet[strings.ToLower(cat)] {
+			label = "✅ " + cat
+		}
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(label, "cat:"+cat),
+		))
+	}
+	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+// handleCallback processes inline keyboard button presses (currently only
+// category toggles from /categories).
+func (b *Bot) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) {
+	if cq.Message == nil {
+		return
+	}
+
+	category, ok := strings.CutPrefix(cq.Data, "cat:")
+	if !ok {
+		return
+	}
+
+	chatID := cq.Message.Chat.ID
+
+	selected, err := b.store.GetSubscriberCategories(ctx, chatID)
+	if err != nil {
+		b.logger.Warn("bot: get subscriber categories failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
+
+	isSelected := false
+	for _, c := range selected {
+		if strings.EqualFold(c, category) {
+			isSelected = true
+			break
+		}
+	}
+
+	if isSelected {
+		err = b.store.RemoveSubscriberCategory(ctx, chatID, category)
+	} else {
+		err = b.store.AddSubscriberCategory(ctx, chatID, category)
+	}
+	if err != nil {
+		b.logger.Warn("bot: toggle subscriber category failed",
+			slog.Int64("chat_id", chatID), slog.String("category", category), slog.String("error", err.Error()))
+	}
+
+	updated, err := b.store.GetSubscriberCategories(ctx, chatID)
+	if err != nil {
+		b.logger.Warn("bot: get subscriber categories failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
+
+	edit := tgbotapi.NewEditMessageReplyMarkup(chatID, cq.Message.MessageID, b.buildCategoriesKeyboard(updated))
+	if _, err := b.api.Send(edit); err != nil {
+		b.logger.Warn("bot: update categories keyboard failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
+
+	// Best-effort: acknowledge the tap so Telegram clears the loading spinner.
+	// The library tries to decode the result as a Message, which fails for the
+	// boolean answerCallbackQuery result — that decode error is expected and ignored.
+	_, _ = b.api.Send(tgbotapi.NewCallback(cq.ID, ""))
+}
+
 // cmdStatus shows the last digest run status.
 func (b *Bot) cmdStatus(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
 	run, err := b.store.GetLastRun(ctx)
@@ -292,6 +398,23 @@ func (b *Bot) reply(ctx context.Context, msg *tgbotapi.Message, text string) {
 		slog.Int("sent_date", resp.Date),
 		slog.String("parse_mode", cfg.ParseMode),
 	)
+}
+
+// filterByCategories returns the items whose Category matches one of cats
+// (case-insensitive). Items with no category never match a non-empty filter.
+func filterByCategories(items []models.RankedNewsItem, cats []string) []models.RankedNewsItem {
+	wanted := make(map[string]bool, len(cats))
+	for _, c := range cats {
+		wanted[strings.ToLower(c)] = true
+	}
+
+	filtered := make([]models.RankedNewsItem, 0, len(items))
+	for _, item := range items {
+		if item.Category != "" && wanted[strings.ToLower(item.Category)] {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 // SendRaw sends a message to a chat ID without reply.
@@ -343,8 +466,6 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 		return nil
 	}
 
-	parts := b.formatter.DigestParts(items, date)
-
 	// Global rate limiter: one send token per 50ms (~20 msg/s, within Telegram's limit).
 	// Each goroutine waits for a tick, so sends are serialised through the ticker channel.
 	rateLimiter := time.NewTicker(50 * time.Millisecond)
@@ -370,6 +491,18 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 				return
 			}
 			defer func() { <-sem }()
+
+			filtered := items
+			if cats, err := b.store.GetSubscriberCategories(ctx, id); err != nil {
+				b.logger.Warn("bot: get subscriber categories failed",
+					slog.Int64("chat_id", id), slog.String("error", err.Error()))
+			} else if len(cats) > 0 {
+				filtered = filterByCategories(items, cats)
+			}
+			if len(filtered) == 0 {
+				return
+			}
+			parts := b.formatter.DigestParts(filtered, date)
 
 			for _, part := range parts {
 				// Wait for a rate limiter token (globally serialises sends).

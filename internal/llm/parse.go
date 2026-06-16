@@ -26,13 +26,13 @@ var (
 // parseLLMResponse extracts ranked news items from the LLM's free-text response.
 // Returns an error if structured parsing yields 0 items so the caller can
 // distinguish a real parse failure from an empty-but-valid result.
-func parseLLMResponse(response string, originalItems []models.NewsItem, topN int) ([]models.RankedNewsItem, error) {
+func parseLLMResponse(response string, originalItems []models.NewsItem, topN int, categories []string) ([]models.RankedNewsItem, error) {
 	response = strings.TrimSpace(response)
 	if response == "" {
 		return nil, fmt.Errorf("llm: empty response")
 	}
 
-	ranked := tryParseStructured(response, topN)
+	ranked := tryParseStructured(response, topN, categories)
 	if len(ranked) > 0 {
 		return enrichRankedItems(ranked, originalItems), nil
 	}
@@ -54,7 +54,9 @@ func truncateForLog(s string, maxLen int) string {
 }
 
 // tryParseStructured attempts to parse the LLM response into RankedNewsItem slices.
-func tryParseStructured(response string, topN int) []models.RankedNewsItem {
+// Each item's category is taken from an explicit "Категория:" line if present and
+// valid; otherwise it is filled in via keyword classification against categories.
+func tryParseStructured(response string, topN int, categories []string) []models.RankedNewsItem {
 	lines := strings.Split(response, "\n")
 	if len(lines) == 0 {
 		return nil
@@ -65,7 +67,26 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 	var currentTitle string
 	var currentSummary strings.Builder
 	var currentURL string
+	var currentCategory string
 	inItem := false
+
+	flush := func() {
+		if !inItem || currentTitle == "" {
+			return
+		}
+		summary := strings.TrimSpace(currentSummary.String())
+		category := matchCategory(currentCategory, categories)
+		if category == "" {
+			category = classifyCategory(currentTitle, summary, categories)
+		}
+		ranked = append(ranked, models.RankedNewsItem{
+			Rank:     currentRank,
+			Title:    currentTitle,
+			Summary:  summary,
+			Link:     currentURL,
+			Category: category,
+		})
+	}
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -75,15 +96,7 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 
 		// Detect numbered item start using package-level compiled regex.
 		if match := rankRe.FindStringSubmatch(line); match != nil {
-			// Save previous item.
-			if inItem && currentTitle != "" {
-				ranked = append(ranked, models.RankedNewsItem{
-					Rank:    currentRank,
-					Title:   currentTitle,
-					Summary: strings.TrimSpace(currentSummary.String()),
-					Link:    currentURL,
-				})
-			}
+			flush()
 
 			// Start new item.
 			inItem = true
@@ -98,43 +111,45 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 			}
 			currentSummary.Reset()
 			currentURL = ""
+			currentCategory = ""
+			continue
+		}
+
+		if !inItem {
+			continue
+		}
+
+		// Detect an explicit category line, e.g. "Категория: AI".
+		if rest, ok := stripCategoryPrefix(line); ok {
+			currentCategory = rest
 			continue
 		}
 
 		// Accumulate summary and extract URL from body lines.
-		if inItem {
-			if u := urlRe.FindString(line); u != "" {
-				currentURL = strings.TrimRight(u, trailingPunct)
+		if u := urlRe.FindString(line); u != "" {
+			currentURL = strings.TrimRight(u, trailingPunct)
+		}
+		// Strip URLs, then clean up label remnants.
+		text := urlRe.ReplaceAllString(line, "")
+		text = strings.TrimSpace(text)
+		text = strings.TrimPrefix(text, "URL:")
+		text = strings.TrimPrefix(text, "Ссылка:")
+		text = strings.TrimPrefix(text, "Источник:")
+		text = strings.TrimSuffix(text, "URL:")
+		text = strings.TrimSuffix(text, "Ссылка:")
+		// Remove stray "URL:" fragments in the middle of the text.
+		text = strings.ReplaceAll(text, " URL:", "")
+		text = strings.TrimSpace(text)
+		if text != "" {
+			if currentSummary.Len() > 0 {
+				currentSummary.WriteString(" ")
 			}
-			// Strip URLs, then clean up label remnants.
-			text := urlRe.ReplaceAllString(line, "")
-			text = strings.TrimSpace(text)
-			text = strings.TrimPrefix(text, "URL:")
-			text = strings.TrimPrefix(text, "Ссылка:")
-			text = strings.TrimPrefix(text, "Источник:")
-			text = strings.TrimSuffix(text, "URL:")
-			text = strings.TrimSuffix(text, "Ссылка:")
-			// Remove stray "URL:" fragments in the middle of the text.
-			text = strings.ReplaceAll(text, " URL:", "")
-			text = strings.TrimSpace(text)
-			if text != "" {
-				if currentSummary.Len() > 0 {
-					currentSummary.WriteString(" ")
-				}
-				currentSummary.WriteString(text)
-			}
+			currentSummary.WriteString(text)
 		}
 	}
 
 	// Flush the last item.
-	if inItem && currentTitle != "" {
-		ranked = append(ranked, models.RankedNewsItem{
-			Rank:    currentRank,
-			Title:   currentTitle,
-			Summary: strings.TrimSpace(currentSummary.String()),
-			Link:    currentURL,
-		})
-	}
+	flush()
 
 	if len(ranked) > topN {
 		ranked = ranked[:topN]
@@ -146,9 +161,20 @@ func tryParseStructured(response string, topN int) []models.RankedNewsItem {
 	return ranked
 }
 
+// stripCategoryPrefix returns the value after a "Категория:"/"Category:" label
+// and true, or "", false if line does not start with such a label.
+func stripCategoryPrefix(line string) (string, bool) {
+	for _, prefix := range []string{"Категория:", "Category:"} {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix)), true
+		}
+	}
+	return "", false
+}
+
 // createFallback generates top-N ranked items from the given list
 // sorted by publication time (most recent first).
-func createFallback(items []models.NewsItem, topN int) []models.RankedNewsItem {
+func createFallback(items []models.NewsItem, topN int, categories []string) []models.RankedNewsItem {
 	if len(items) == 0 {
 		return nil
 	}
@@ -178,6 +204,7 @@ func createFallback(items []models.NewsItem, topN int) []models.RankedNewsItem {
 			Link:        sorted[i].Link,
 			PublishedAt: sorted[i].PublishedAt,
 			Source:      extractSourceName(sorted[i].FeedURL),
+			Category:    classifyCategory(sorted[i].Title, sorted[i].Description, categories),
 		}
 	}
 
