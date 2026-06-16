@@ -40,6 +40,18 @@ func (f *Formatter) Digest(items []models.RankedNewsItem, date time.Time) string
 	return Digest(items, date, f.mode, f.topN)
 }
 
+// TopN returns the configured number of items shown in the daily digest.
+func (f *Formatter) TopN() int {
+	return f.topN
+}
+
+// PlainDigestHeader returns the digest header label without any Telegram
+// markup (no <b>/* wrapping), suitable as input to LLM translation before
+// being wrapped via TopicDigestParts for the target language.
+func PlainDigestHeader(date time.Time, topN int) string {
+	return fmt.Sprintf("📰 Топ-%d новостей за %s", topN, date.Format("02.01.2006"))
+}
+
 // DigestParts splits the digest into Telegram-safe chunks (≤4096 runes each).
 // The header is always in the first chunk; each news item is kept intact.
 // If a single item alone exceeds maxLen it is truncated with an ellipsis.
@@ -250,15 +262,17 @@ func StartMessage(mode ParseMode) string {
 Отправь <code>/subscribe</code> чтобы подписаться на ежедневный дайджест.
 Отправь <code>/unsubscribe</code> чтобы отписаться.
 Отправь <code>/categories</code> чтобы выбрать интересующие темы.
-Отправь <code>/digest тема</code> чтобы получить новости по конкретному запросу, например <code>/digest нейросети в медицине</code>.`
+Отправь <code>/digest тема</code> чтобы получить новости по конкретному запросу, например <code>/digest нейросети в медицине</code>.
+Отправь <code>/language English</code> чтобы получать дайджест на другом языке.`
 	case MarkdownV2:
 		return `*Привет! Я бот дайджеста новостей.*
 Отправь /subscribe чтобы подписаться на ежедневный дайджест.
 Отправь /unsubscribe чтобы отписаться.
 Отправь /categories чтобы выбрать интересующие темы.
-Отправь /digest тема чтобы получить новости по конкретному запросу.`
+Отправь /digest тема чтобы получить новости по конкретному запросу.
+Отправь /language English чтобы получать дайджест на другом языке.`
 	default:
-		return "Привет! Я бот дайджеста новостей.\n\nОтправь /subscribe чтобы подписаться на ежедневный дайджест.\nОтправь /unsubscribe чтобы отписаться.\nОтправь /categories чтобы выбрать интересующие темы.\nОтправь /digest тема чтобы получить новости по конкретному запросу."
+		return "Привет! Я бот дайджеста новостей.\n\nОтправь /subscribe чтобы подписаться на ежедневный дайджест.\nОтправь /unsubscribe чтобы отписаться.\nОтправь /categories чтобы выбрать интересующие темы.\nОтправь /digest тема чтобы получить новости по конкретному запросу.\nОтправь /language English чтобы получать дайджест на другом языке."
 	}
 }
 

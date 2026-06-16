@@ -25,6 +25,11 @@ type BroadcastFunc func(ctx context.Context) error
 // empty (nothing relevant found) without that being an error.
 type TopicDigestFunc func(ctx context.Context, topic string) ([]models.RankedNewsItem, bool, error)
 
+// TranslateDigestFunc translates a ranked digest's titles, summaries and
+// header into targetLang. Implementations should return the original items
+// and header unchanged (plus an error) if translation isn't possible.
+type TranslateDigestFunc func(ctx context.Context, items []models.RankedNewsItem, header, targetLang string) ([]models.RankedNewsItem, string, error)
+
 // TGAPI defines the minimal subset of telegram-bot-api needed by Bot.
 // This interface allows mocking in tests.
 type TGAPI interface {
@@ -43,6 +48,7 @@ type Bot struct {
 	ownerID     int64
 	categories  []string
 	topicFn     TopicDigestFunc
+	translateFn TranslateDigestFunc
 }
 
 // SetTopicDigestFunc wires the callback used to answer "/digest <тема>"
@@ -50,6 +56,13 @@ type Bot struct {
 // closes over the bot itself (e.g. to access store/llm client built in main).
 func (b *Bot) SetTopicDigestFunc(fn TopicDigestFunc) {
 	b.topicFn = fn
+}
+
+// SetTranslateFunc wires the callback used to translate digest titles and
+// summaries into a subscriber's chosen language. Must be called after
+// construction for the same reason as SetTopicDigestFunc.
+func (b *Bot) SetTranslateFunc(fn TranslateDigestFunc) {
+	b.translateFn = fn
 }
 
 // New creates a new Bot.
@@ -218,6 +231,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.cmdStatus(ctx, chatID, msg)
 	case "categories":
 		b.cmdCategories(ctx, chatID, msg)
+	case "language":
+		b.cmdLanguage(ctx, chatID, msg)
 	default:
 		b.reply(ctx, msg, formatter.UnknownCommandMessage(formatter.ParseMode(b.cfg.ParseMode)))
 	}
@@ -306,12 +321,75 @@ func (b *Bot) cmdDigestTopic(ctx context.Context, msg *tgbotapi.Message, topic s
 		header += " (по ключевым словам)"
 	}
 
+	if lang, err := b.store.GetSubscriberLanguage(ctx, chatID); err != nil {
+		b.logger.Warn("bot: get subscriber language failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	} else {
+		ranked, header = b.translateForLanguage(ctx, ranked, header, lang)
+	}
+
 	for _, part := range b.formatter.TopicDigestParts(header, ranked) {
 		if err := b.SendRaw(ctx, chatID, part); err != nil {
 			b.logger.Warn("bot: send topic digest part failed",
 				slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
 			return
 		}
+	}
+}
+
+// cmdLanguage shows or changes the chat's digest language preference.
+// "/language" alone reports the current setting; "/language <язык>" sets it.
+// Any free-text language name is accepted — translation is done by the LLM,
+// not matched against a fixed list.
+func (b *Bot) cmdLanguage(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
+	lang := strings.TrimSpace(msg.CommandArguments())
+
+	if lang == "" {
+		current, err := b.store.GetSubscriberLanguage(ctx, chatID)
+		if err != nil {
+			b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка: %v", err))
+			return
+		}
+		b.reply(ctx, msg, fmt.Sprintf(
+			"🌐 Текущий язык дайджеста: %s\nЧтобы изменить, напишите, например: /language English\nЧтобы вернуться к русскому: /language русский",
+			current))
+		return
+	}
+
+	if err := b.store.SetSubscriberLanguage(ctx, chatID, lang); err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка: %v", err))
+		return
+	}
+	b.reply(ctx, msg, fmt.Sprintf("✅ Язык дайджеста изменён на: %s", lang))
+}
+
+// translateForLanguage translates items+header into lang via the configured
+// TranslateDigestFunc, falling back to the original (Russian) items/header on
+// any failure or if no translator is wired up. A Russian/empty lang is a no-op.
+func (b *Bot) translateForLanguage(ctx context.Context, items []models.RankedNewsItem, header, lang string) ([]models.RankedNewsItem, string) {
+	if isDefaultLanguage(lang) || b.translateFn == nil {
+		return items, header
+	}
+
+	translated, translatedHeader, err := b.translateFn(ctx, items, header, lang)
+	if err != nil {
+		b.logger.Warn("bot: translate digest failed, using Russian",
+			slog.String("language", lang), slog.String("error", err.Error()))
+		return items, header
+	}
+	if translatedHeader == "" {
+		translatedHeader = header
+	}
+	return translated, translatedHeader
+}
+
+// isDefaultLanguage reports whether lang means "no translation needed" (Russian).
+func isDefaultLanguage(lang string) bool {
+	switch strings.ToLower(strings.TrimSpace(lang)) {
+	case "", "ru", "rus", "russian", "русский":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -512,14 +590,19 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 		slog.Time("date", date),
 	)
 
-	chats, err := b.store.GetActiveChats(ctx)
+	chatsByLang, err := b.store.GetActiveChatsByLanguage(ctx)
 	if err != nil {
 		return fmt.Errorf("bot: get active chats: %w", err)
 	}
 
-	b.logger.Info("bot: broadcast subscribers", slog.Int("subscribers", len(chats)))
+	totalChats := 0
+	for _, ids := range chatsByLang {
+		totalChats += len(ids)
+	}
+	b.logger.Info("bot: broadcast subscribers",
+		slog.Int("subscribers", totalChats), slog.Int("languages", len(chatsByLang)))
 
-	if len(chats) == 0 {
+	if totalChats == 0 {
 		return nil
 	}
 
@@ -536,69 +619,85 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 	var mu sync.Mutex
 	failedCount := 0
 
-	for _, chatID := range chats {
-		wg.Add(1)
-		go func(id int64) {
-			defer wg.Done()
-
-			// Acquire semaphore slot with ctx awareness.
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				return
+	for lang, chatIDs := range chatsByLang {
+		// Translate once per distinct language rather than per subscriber.
+		langItems := items
+		buildParts := func(filtered []models.RankedNewsItem) []string {
+			return b.formatter.DigestParts(filtered, date)
+		}
+		if !isDefaultLanguage(lang) {
+			translatedItems, translatedHeader := b.translateForLanguage(
+				ctx, items, formatter.PlainDigestHeader(date, b.formatter.TopN()), lang)
+			langItems = translatedItems
+			buildParts = func(filtered []models.RankedNewsItem) []string {
+				return b.formatter.TopicDigestParts(translatedHeader, filtered)
 			}
-			defer func() { <-sem }()
+		}
 
-			filtered := items
-			if cats, err := b.store.GetSubscriberCategories(ctx, id); err != nil {
-				b.logger.Warn("bot: get subscriber categories failed",
-					slog.Int64("chat_id", id), slog.String("error", err.Error()))
-			} else if len(cats) > 0 {
-				filtered = filterByCategories(items, cats)
-			}
-			if len(filtered) == 0 {
-				return
-			}
-			parts := b.formatter.DigestParts(filtered, date)
+		for _, chatID := range chatIDs {
+			wg.Add(1)
+			go func(id int64, langItems []models.RankedNewsItem, buildParts func([]models.RankedNewsItem) []string) {
+				defer wg.Done()
 
-			for _, part := range parts {
-				// Wait for a rate limiter token (globally serialises sends).
+				// Acquire semaphore slot with ctx awareness.
 				select {
-				case <-rateLimiter.C:
+				case sem <- struct{}{}:
 				case <-ctx.Done():
 					return
 				}
+				defer func() { <-sem }()
 
-				if err := b.SendRaw(ctx, id, part); err != nil {
-					mu.Lock()
-					failedCount++
-					mu.Unlock()
-
-					// Check if it's a permanent failure (bot blocked us)
-					if strings.Contains(err.Error(), "chat not found") ||
-						strings.Contains(err.Error(), "bot was blocked") ||
-						strings.Contains(err.Error(), "user is deactivated") {
-						b.logger.Warn("bot: marking subscriber as inactive", slog.Int64("chat_id", id))
-						if unsubErr := b.store.Unsubscribe(ctx, id); unsubErr != nil {
-							b.logger.Warn("bot: unsubscribe failed",
-								slog.Int64("chat_id", id),
-								slog.String("error", unsubErr.Error()),
-							)
-						}
-					}
+				filtered := langItems
+				if cats, err := b.store.GetSubscriberCategories(ctx, id); err != nil {
+					b.logger.Warn("bot: get subscriber categories failed",
+						slog.Int64("chat_id", id), slog.String("error", err.Error()))
+				} else if len(cats) > 0 {
+					filtered = filterByCategories(langItems, cats)
+				}
+				if len(filtered) == 0 {
 					return
 				}
-			}
-		}(chatID)
+				parts := buildParts(filtered)
+
+				for _, part := range parts {
+					// Wait for a rate limiter token (globally serialises sends).
+					select {
+					case <-rateLimiter.C:
+					case <-ctx.Done():
+						return
+					}
+
+					if err := b.SendRaw(ctx, id, part); err != nil {
+						mu.Lock()
+						failedCount++
+						mu.Unlock()
+
+						// Check if it's a permanent failure (bot blocked us)
+						if strings.Contains(err.Error(), "chat not found") ||
+							strings.Contains(err.Error(), "bot was blocked") ||
+							strings.Contains(err.Error(), "user is deactivated") {
+							b.logger.Warn("bot: marking subscriber as inactive", slog.Int64("chat_id", id))
+							if unsubErr := b.store.Unsubscribe(ctx, id); unsubErr != nil {
+								b.logger.Warn("bot: unsubscribe failed",
+									slog.Int64("chat_id", id),
+									slog.String("error", unsubErr.Error()),
+								)
+							}
+						}
+						return
+					}
+				}
+			}(chatID, langItems, buildParts)
+		}
 	}
 
 	wg.Wait()
 
 	if failedCount > 0 {
 		b.logger.Warn("bot: broadcast completed with failures",
-			slog.Int("total", len(chats)),
+			slog.Int("total", totalChats),
 			slog.Int("failed", failedCount),
-			slog.Int("success", len(chats)-failedCount),
+			slog.Int("success", totalChats-failedCount),
 		)
 	}
 

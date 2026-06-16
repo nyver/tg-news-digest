@@ -324,3 +324,66 @@ func TestSubscriberCategories_ScopedPerChat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"LLM"}, cats2)
 }
+
+func TestSubscriberLanguage_DefaultsToRussian(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	// Chat has never subscribed.
+	lang, err := s.GetSubscriberLanguage(ctx, 999)
+	require.NoError(t, err)
+	assert.Equal(t, "ru", lang)
+
+	// Subscribed but never set a language preference.
+	require.NoError(t, s.SaveSubscriber(ctx, 100))
+	lang, err = s.GetSubscriberLanguage(ctx, 100)
+	require.NoError(t, err)
+	assert.Equal(t, "ru", lang)
+}
+
+func TestSubscriberLanguage_SetAndGet(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SaveSubscriber(ctx, 100))
+	require.NoError(t, s.SetSubscriberLanguage(ctx, 100, "English"))
+
+	lang, err := s.GetSubscriberLanguage(ctx, 100)
+	require.NoError(t, err)
+	assert.Equal(t, "English", lang)
+}
+
+func TestSubscriberLanguage_SurvivesResubscribe(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SaveSubscriber(ctx, 100))
+	require.NoError(t, s.SetSubscriberLanguage(ctx, 100, "English"))
+	require.NoError(t, s.Unsubscribe(ctx, 100))
+	require.NoError(t, s.SaveSubscriber(ctx, 100)) // re-subscribe
+
+	lang, err := s.GetSubscriberLanguage(ctx, 100)
+	require.NoError(t, err)
+	assert.Equal(t, "English", lang)
+}
+
+func TestGetActiveChatsByLanguage(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SaveSubscriber(ctx, 1))
+	require.NoError(t, s.SaveSubscriber(ctx, 2))
+	require.NoError(t, s.SaveSubscriber(ctx, 3))
+	require.NoError(t, s.SetSubscriberLanguage(ctx, 2, "English"))
+	require.NoError(t, s.SetSubscriberLanguage(ctx, 3, "English"))
+	// Inactive subscriber should not show up in any group.
+	require.NoError(t, s.SaveSubscriber(ctx, 4))
+	require.NoError(t, s.SetSubscriberLanguage(ctx, 4, "English"))
+	require.NoError(t, s.Unsubscribe(ctx, 4))
+
+	groups, err := s.GetActiveChatsByLanguage(ctx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int64{1}, groups["ru"])
+	assert.ElementsMatch(t, []int64{2, 3}, groups["English"])
+	assert.NotContains(t, groups["English"], int64(4))
+}

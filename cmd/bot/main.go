@@ -95,6 +95,13 @@ func main() {
 		return llmClient.RankByTopic(ctx, recent, topic, cfg.App.DigestTopN)
 	})
 
+	// Wire per-subscriber language translation: titles/summaries are produced
+	// in Russian by the ranking step, then translated on demand into whatever
+	// language a subscriber chose via /language.
+	b.SetTranslateFunc(func(ctx context.Context, items []models.RankedNewsItem, header, targetLang string) ([]models.RankedNewsItem, string, error) {
+		return llmClient.TranslateDigest(ctx, items, header, targetLang)
+	})
+
 	// Initialize healthcheck
 	hc := healthcheck.New(*cfg, store, logger).WithPort(cfg.App.HealthPort)
 	_, healthShutdown := hc.StartHTTPServer(ctx)

@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -347,6 +348,122 @@ func TestCmdDigestTopic_NoHandlerConfigured(t *testing.T) {
 	bot.cmdDigestTopic(ctx, msg, "космос")
 
 	assert.Contains(t, gotText, "временно недоступен")
+}
+
+func TestCmdLanguage_ShowsCurrent(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			gotText = m.Text
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}, Entities: []tgbotapi.MessageEntity{{Type: "bot_command", Offset: 0, Length: 9}}, Text: "/language"}
+	bot.cmdLanguage(ctx, 42, msg)
+
+	assert.Contains(t, gotText, "ru")
+}
+
+func TestCmdLanguage_SetsLanguage(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	text := "/language English"
+	msg := &tgbotapi.Message{
+		MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}, Text: text,
+		Entities: []tgbotapi.MessageEntity{{Type: "bot_command", Offset: 0, Length: 9}},
+	}
+	bot.cmdLanguage(ctx, 42, msg)
+
+	lang, err := bot.store.GetSubscriberLanguage(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "English", lang)
+}
+
+func TestCmdDigestTopic_TranslatesForChatLanguage(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	require.NoError(t, bot.store.SaveSubscriber(ctx, 42))
+	require.NoError(t, bot.store.SetSubscriberLanguage(ctx, 42, "English"))
+
+	bot.SetTopicDigestFunc(func(ctx context.Context, topic string) ([]models.RankedNewsItem, bool, error) {
+		return []models.RankedNewsItem{{Rank: 1, Title: "Заголовок", Summary: "Описание", Link: "https://x.com"}}, true, nil
+	})
+	bot.SetTranslateFunc(func(ctx context.Context, items []models.RankedNewsItem, header, lang string) ([]models.RankedNewsItem, string, error) {
+		assert.Equal(t, "English", lang)
+		translated := make([]models.RankedNewsItem, len(items))
+		copy(translated, items)
+		translated[0].Title = "Translated title"
+		return translated, "Translated header", nil
+	})
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			gotText = m.Text
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}}
+	bot.cmdDigestTopic(ctx, msg, "ai")
+
+	assert.Contains(t, gotText, "Translated title")
+}
+
+func TestBroadcast_TranslatesPerLanguageGroup(t *testing.T) {
+	ctx := context.Background()
+	mockAPI := new(mockTGAPI)
+	store := newTestStore(t)
+
+	require.NoError(t, store.SaveSubscriber(ctx, 100)) // ru (default)
+	require.NoError(t, store.SaveSubscriber(ctx, 200))
+	require.NoError(t, store.SetSubscriberLanguage(ctx, 200, "English"))
+
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
+	require.NoError(t, err)
+
+	bot.SetTranslateFunc(func(ctx context.Context, items []models.RankedNewsItem, header, lang string) ([]models.RankedNewsItem, string, error) {
+		assert.Equal(t, "English", lang)
+		translated := make([]models.RankedNewsItem, len(items))
+		copy(translated, items)
+		translated[0].Title = "Translated"
+		return translated, "Translated header", nil
+	})
+
+	items := []models.RankedNewsItem{{Rank: 1, Title: "Оригинал", Summary: "S", Link: "https://x.com"}}
+
+	var textByChat = make(map[int64]string)
+	var mu sync.Mutex
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			mu.Lock()
+			textByChat[m.ChatID] = m.Text
+			mu.Unlock()
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	err = bot.Broadcast(ctx, items, time.Now())
+	require.NoError(t, err)
+
+	assert.Contains(t, textByChat[100], "Оригинал")
+	assert.NotContains(t, textByChat[100], "Translated")
+	assert.Contains(t, textByChat[200], "Translated")
 }
 
 func TestBroadcast_ConcurrentSafe(t *testing.T) {

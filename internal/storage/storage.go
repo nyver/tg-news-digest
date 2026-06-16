@@ -108,6 +108,12 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("storage: alter digest_runs: %w", alterErr)
 	}
 
+	// Add language column to subscribers — idempotent: ignore only "duplicate column" errors.
+	_, langErr := s.db.ExecContext(ctx, `ALTER TABLE subscribers ADD COLUMN language TEXT NOT NULL DEFAULT 'ru'`)
+	if langErr != nil && !strings.Contains(langErr.Error(), "duplicate column name") {
+		return fmt.Errorf("storage: alter subscribers: %w", langErr)
+	}
+
 	return nil
 }
 
@@ -129,6 +135,65 @@ func (s *Store) Unsubscribe(ctx context.Context, chatID int64) error {
 		chatID,
 	)
 	return err
+}
+
+// SetSubscriberLanguage sets the digest language preference for a chat.
+// If the chat has never subscribed, a row is created with active = 0 so the
+// preference is remembered for when they do subscribe (SaveSubscriber's
+// ON CONFLICT only flips active, it never touches language).
+func (s *Store) SetSubscriberLanguage(ctx context.Context, chatID int64, language string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO subscribers (chat_id, created_at, active, language)
+		 VALUES (?, CURRENT_TIMESTAMP, 0, ?)
+		 ON CONFLICT(chat_id) DO UPDATE SET language = excluded.language`,
+		chatID, language,
+	)
+	return err
+}
+
+// GetSubscriberLanguage returns the chat's digest language, defaulting to "ru"
+// if the chat has no preference set (or hasn't subscribed yet).
+func (s *Store) GetSubscriberLanguage(ctx context.Context, chatID int64) (string, error) {
+	var language string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT language FROM subscribers WHERE chat_id = ?`, chatID,
+	).Scan(&language)
+	if err == sql.ErrNoRows {
+		return "ru", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if language == "" {
+		language = "ru"
+	}
+	return language, nil
+}
+
+// GetActiveChatsByLanguage groups active subscribers by their selected digest
+// language, so a broadcast only needs to translate once per distinct language.
+func (s *Store) GetActiveChatsByLanguage(ctx context.Context) (map[string][]int64, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT chat_id, language FROM subscribers WHERE active = 1 ORDER BY chat_id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]int64)
+	for rows.Next() {
+		var chatID int64
+		var language string
+		if err := rows.Scan(&chatID, &language); err != nil {
+			return nil, err
+		}
+		if language == "" {
+			language = "ru"
+		}
+		result[language] = append(result[language], chatID)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) IsActive(ctx context.Context, chatID int64) (bool, error) {
