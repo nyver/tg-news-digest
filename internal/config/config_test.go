@@ -84,6 +84,7 @@ rss:
 	assert.Equal(t, "Europe/Moscow", cfg.Schedule.Timezone)
 	assert.Equal(t, 3, cfg.App.RetryMax)
 	assert.Equal(t, 2*time.Second, cfg.App.RetryBackoff)
+	assert.Equal(t, 3, cfg.App.FetchedItemsRetentionDays)
 }
 
 func TestLoad_EnvOverride(t *testing.T) {

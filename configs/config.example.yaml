@@ -48,9 +48,20 @@ schedule:
   cron: "0 9 * * *"             # Ежедневно в 09:00
   timezone: "Europe/Moscow"
 
+# Категории для классификации новостей (LLM + keyword-фоллбэк).
+# Используются в /categories (выбор подписчиком) и в /digest <тема>.
+categories:
+  - "AI"
+  - "LLM"
+  - "Программирование"
+  - "IT"
+
 app:
   db_path: "./data/bot.db"
   log_level: "info"             # debug, info, warn, error
   retry_max: 3
   retry_backoff: 2s
   digest_log_path: "./data/bot.log"
+  health_port: 9100             # Порт HTTP-эндпоинта healthcheck
+  digest_top_n: 10              # Количество новостей в ежедневном дайджесте
+  fetched_items_retention_days: 3  # Хранить fetched_items не дольше N дней (housekeeping)

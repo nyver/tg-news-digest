@@ -295,6 +295,22 @@ func (s *Store) CleanupExpired(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+// CleanupOldFetchedItems removes fetched items whose original publication date
+// is older than olderThan. This is a retention safety net independent of the
+// per-item TTL (expires_at/cache_ttl) — it guards against fetched_items growing
+// unbounded if the cache TTL is configured longer than the desired retention.
+func (s *Store) CleanupOldFetchedItems(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := time.Now().Add(-olderThan).UTC().Format("2006-01-02 15:04:05")
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM fetched_items WHERE published_at < ?`, cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // CountActiveItems returns the number of non-expired items.
 func (s *Store) CountActiveItems(ctx context.Context) (int, error) {
 	var count int

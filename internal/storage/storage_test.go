@@ -190,6 +190,50 @@ func TestGetLastRun_NoRuns(t *testing.T) {
 	assert.Nil(t, last)
 }
 
+func TestCleanupOldFetchedItems(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	old := models.NewsItem{
+		ID: "old", Title: "Old item", Description: "D", Link: "https://example.com/old",
+		PublishedAt: time.Now().Add(-5 * 24 * time.Hour), FeedURL: "https://example.com/feed.xml",
+	}
+	recent := models.NewsItem{
+		ID: "recent", Title: "Recent item", Description: "D", Link: "https://example.com/recent",
+		PublishedAt: time.Now().Add(-1 * time.Hour), FeedURL: "https://example.com/feed.xml",
+	}
+	// Long TTL so CleanupExpired (the existing expires_at-based cleanup) does
+	// not also remove these — we want to isolate CleanupOldFetchedItems.
+	require.NoError(t, s.SaveItems(ctx, []models.NewsItem{old, recent}, 30*24*time.Hour))
+
+	n, err := s.CleanupOldFetchedItems(ctx, 3*24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	exists, err := s.ItemExists(ctx, "old")
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	exists, err = s.ItemExists(ctx, "recent")
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
+func TestCleanupOldFetchedItems_NothingToRemove(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	item := models.NewsItem{
+		ID: "recent", Title: "Recent item", Description: "D", Link: "https://example.com/recent",
+		PublishedAt: time.Now(), FeedURL: "https://example.com/feed.xml",
+	}
+	require.NoError(t, s.SaveItems(ctx, []models.NewsItem{item}, 24*time.Hour))
+
+	n, err := s.CleanupOldFetchedItems(ctx, 3*24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
+}
+
 func TestGetRecentItems(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

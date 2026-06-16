@@ -59,13 +59,14 @@ type ScheduleConfig struct {
 }
 
 type AppConfig struct {
-	DBPath        string        `mapstructure:"db_path"`
-	LogLevel      string        `mapstructure:"log_level"`
-	RetryMax      int           `mapstructure:"retry_max"`
-	RetryBackoff  time.Duration `mapstructure:"retry_backoff"`
-	DigestLogPath string        `mapstructure:"digest_log_path"`
-	HealthPort    int           `mapstructure:"health_port"`
-	DigestTopN    int           `mapstructure:"digest_top_n"`
+	DBPath                    string        `mapstructure:"db_path"`
+	LogLevel                  string        `mapstructure:"log_level"`
+	RetryMax                  int           `mapstructure:"retry_max"`
+	RetryBackoff              time.Duration `mapstructure:"retry_backoff"`
+	DigestLogPath             string        `mapstructure:"digest_log_path"`
+	HealthPort                int           `mapstructure:"health_port"`
+	DigestTopN                int           `mapstructure:"digest_top_n"`
+	FetchedItemsRetentionDays int           `mapstructure:"fetched_items_retention_days"`
 }
 
 // Load reads configuration from file and/or environment variables.
@@ -165,6 +166,9 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.App.DigestTopN <= 0 {
 		cfg.App.DigestTopN = 10
+	}
+	if cfg.App.FetchedItemsRetentionDays <= 0 {
+		cfg.App.FetchedItemsRetentionDays = 3
 	}
 	if cfg.Schedule.Cron == "" {
 		cfg.Schedule.Cron = "0 9 * * *"

@@ -131,11 +131,20 @@ func main() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 
+		fetchedItemsMaxAge := time.Duration(cfg.App.FetchedItemsRetentionDays) * 24 * time.Hour
+
 		runCleanup := func() {
 			if n, err := store.CleanupOldDigestRuns(ctx, 30*24*time.Hour); err != nil {
 				logger.Warn("cleanup: old digest runs", slog.String("error", err.Error()))
 			} else if n > 0 {
 				logger.Info("cleanup: removed old digest runs", slog.Int("count", n))
+			}
+
+			if n, err := store.CleanupOldFetchedItems(ctx, fetchedItemsMaxAge); err != nil {
+				logger.Warn("cleanup: old fetched items", slog.String("error", err.Error()))
+			} else if n > 0 {
+				logger.Info("cleanup: removed old fetched items",
+					slog.Int("count", n), slog.Int("retention_days", cfg.App.FetchedItemsRetentionDays))
 			}
 		}
 
