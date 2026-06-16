@@ -72,6 +72,103 @@ func TestRankWithLLM_Success(t *testing.T) {
 	}
 }
 
+func TestRankWithLLM_ToppedUpWhenLLMUnderDelivers(t *testing.T) {
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := llamaChatResponse{
+			Choices: []llamaChoice{
+				{Message: llamaMsg{
+					// LLM returns only 1 item even though topN=3 below.
+					Content: `1. Первая новость
+   Краткое описание. URL: https://example.com/1`,
+				}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
+		Endpoint:      server.URL + "/v1/chat/completions",
+		Model:         "test-model",
+		Temperature:   0.3,
+		MaxTokens:     2000,
+		ContextWindow: 8192,
+		Timeout:       5 * time.Second,
+	}
+	client := New(cfg, slog.Default())
+
+	items := []models.NewsItem{
+		{ID: "1", Title: "Title 1", Description: "Desc 1", Link: "https://example.com/1", PublishedAt: time.Now().Add(-1 * time.Hour)},
+		{ID: "2", Title: "Title 2", Description: "Desc 2", Link: "https://example.com/2", PublishedAt: time.Now().Add(-2 * time.Hour)},
+		{ID: "3", Title: "Title 3", Description: "Desc 3", Link: "https://example.com/3", PublishedAt: time.Now().Add(-3 * time.Hour)},
+	}
+
+	ranked, llmUsed, err := client.RankWithLLM(context.Background(), items, 3)
+	if err != nil {
+		t.Fatalf("RankWithLLM error: %v", err)
+	}
+	if !llmUsed {
+		t.Error("expected llmUsed=true (LLM did respond, just under-delivered)")
+	}
+	if len(ranked) != 3 {
+		t.Fatalf("expected topped-up result of 3 items, got %d", len(ranked))
+	}
+	// The LLM-selected item must stay first; the rest are backfilled by date.
+	if ranked[0].Link != "https://example.com/1" {
+		t.Errorf("expected LLM item first, got %s", ranked[0].Link)
+	}
+	seen := map[string]bool{}
+	for i, item := range ranked {
+		if item.Rank != i+1 {
+			t.Errorf("expected rank %d, got %d", i+1, item.Rank)
+		}
+		if seen[item.Link] {
+			t.Errorf("duplicate link in topped-up result: %s", item.Link)
+		}
+		seen[item.Link] = true
+	}
+}
+
+func TestRankWithLLM_NoTopUpWhenNotEnoughItems(t *testing.T) {
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := llamaChatResponse{
+			Choices: []llamaChoice{
+				{Message: llamaMsg{
+					Content: `1. Первая новость
+   Краткое описание. URL: https://example.com/1`,
+				}},
+			},
+		}
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
+		Endpoint:      server.URL + "/v1/chat/completions",
+		Model:         "test-model",
+		ContextWindow: 8192,
+		Timeout:       5 * time.Second,
+	}
+	client := New(cfg, slog.Default())
+
+	// Only 1 source item exists at all — can't top up beyond what's available.
+	items := []models.NewsItem{
+		{ID: "1", Title: "Title 1", Description: "Desc 1", Link: "https://example.com/1", PublishedAt: time.Now()},
+	}
+
+	ranked, _, err := client.RankWithLLM(context.Background(), items, 10)
+	if err != nil {
+		t.Fatalf("RankWithLLM error: %v", err)
+	}
+	if len(ranked) != 1 {
+		t.Fatalf("expected 1 item (nothing more available to top up with), got %d", len(ranked))
+	}
+}
+
 func TestRankWithLLM_ServerError_Fallback(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)

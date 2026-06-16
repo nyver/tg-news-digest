@@ -25,6 +25,11 @@ var (
 	// sentenceEndRe matches sentence-terminating punctuation followed by
 	// whitespace or end of string, used to build short fallback summaries.
 	sentenceEndRe = regexp.MustCompile(`[.!?…]+(\s|$)`)
+
+	// categoryPrefixRe matches the "Категория:"/"Category:" label
+	// case-insensitively — models don't reliably preserve the exact casing
+	// shown in the prompt's format example.
+	categoryPrefixRe = regexp.MustCompile(`(?i)^(?:Категория|Category):\s*`)
 )
 
 // firstSentences returns the first maxSentences sentences of text (split on
@@ -191,12 +196,11 @@ func tryParseStructured(response string, topN int, categories []string) []models
 }
 
 // stripCategoryPrefix returns the value after a "Категория:"/"Category:" label
-// and true, or "", false if line does not start with such a label.
+// and true, or "", false if line does not start with such a label. Matching
+// is case-insensitive since models don't reliably preserve exact casing.
 func stripCategoryPrefix(line string) (string, bool) {
-	for _, prefix := range []string{"Категория:", "Category:"} {
-		if strings.HasPrefix(line, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(line, prefix)), true
-		}
+	if loc := categoryPrefixRe.FindStringIndex(line); loc != nil {
+		return strings.TrimSpace(line[loc[1]:]), true
 	}
 	return "", false
 }
@@ -239,8 +243,61 @@ func createFallback(items []models.NewsItem, topN int, categories []string) []mo
 	return result
 }
 
-// enrichRankedItems fills PublishedAt and Source on ranked items by matching
-// their links back to the original RSS items.
+// topUpRanked fills ranked out to topN using additional items from the full
+// original list (already sorted by date, most recent first) that the LLM
+// didn't already select. This guards against the LLM under-delivering (e.g.
+// returning 12 items when topN=20 because it judged the rest unimportant or
+// duplicate) when there is in fact enough fresh material to fill the quota.
+// Items are deduplicated by link; Rank is renumbered across the full result.
+func topUpRanked(ranked []models.RankedNewsItem, all []models.NewsItem, topN int, categories []string) []models.RankedNewsItem {
+	if len(ranked) >= topN {
+		return ranked
+	}
+
+	used := make(map[string]bool, len(ranked))
+	for _, r := range ranked {
+		if r.Link != "" {
+			used[r.Link] = true
+		}
+	}
+
+	for _, item := range all {
+		if len(ranked) >= topN {
+			break
+		}
+		if item.Link == "" || used[item.Link] {
+			continue
+		}
+		used[item.Link] = true
+
+		desc := item.Description
+		if desc == "" {
+			desc = "Подробнее по ссылке"
+		} else {
+			desc = firstSentences(desc, 2, 200)
+		}
+		ranked = append(ranked, models.RankedNewsItem{
+			Title:       item.Title,
+			Summary:     desc,
+			Link:        item.Link,
+			PublishedAt: item.PublishedAt,
+			Source:      extractSourceName(item.FeedURL),
+			Category:    classifyCategory(item.Title, item.Description, categories),
+		})
+	}
+
+	for i := range ranked {
+		ranked[i].Rank = i + 1
+	}
+	return ranked
+}
+
+// enrichRankedItems fills PublishedAt, Source and (if missing) Summary on
+// ranked items by matching their links back to the original RSS items.
+// A missing Summary means the LLM either skipped it for that item or merged
+// it into the title line in a way the parser couldn't split out — in both
+// cases we backfill a short summary from the original RSS description rather
+// than show the item with no descriptive text at all.
 func enrichRankedItems(ranked []models.RankedNewsItem, originals []models.NewsItem) []models.RankedNewsItem {
 	byURL := make(map[string]models.NewsItem, len(originals))
 	for _, item := range originals {
@@ -256,6 +313,13 @@ func enrichRankedItems(ranked []models.RankedNewsItem, originals []models.NewsIt
 		}
 		if ranked[i].Source == "" {
 			ranked[i].Source = extractSourceName(orig.FeedURL)
+		}
+		if ranked[i].Summary == "" {
+			if orig.Description != "" {
+				ranked[i].Summary = firstSentences(orig.Description, 2, 200)
+			} else {
+				ranked[i].Summary = "Подробнее по ссылке"
+			}
 		}
 	}
 	return ranked

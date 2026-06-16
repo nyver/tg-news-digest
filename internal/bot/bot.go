@@ -217,7 +217,9 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	chatID := msg.Chat.ID
 
 	switch cmd {
-	case "start", "subscribe":
+	case "start":
+		b.cmdStart(ctx, chatID, msg)
+	case "subscribe":
 		b.cmdSubscribe(ctx, chatID, msg)
 	case "unsubscribe":
 		b.cmdUnsubscribe(ctx, chatID, msg)
@@ -238,7 +240,18 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	}
 }
 
-// cmdSubscribe handles /start and /subscribe.
+// cmdStart handles /start: subscribes the chat and sends the greeting with
+// the full list of available commands (unlike /subscribe, which only
+// confirms the subscription).
+func (b *Bot) cmdStart(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
+	if err := b.store.SaveSubscriber(ctx, chatID); err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка подписки: %v", err))
+		return
+	}
+	b.reply(ctx, msg, formatter.StartMessage(formatter.ParseMode(b.cfg.ParseMode)))
+}
+
+// cmdSubscribe handles /subscribe.
 func (b *Bot) cmdSubscribe(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
 	if err := b.store.SaveSubscriber(ctx, chatID); err != nil {
 		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка подписки: %v", err))

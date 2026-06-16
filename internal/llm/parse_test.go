@@ -84,6 +84,53 @@ func TestParseLLMResponse_NoNumberedItems(t *testing.T) {
 	}
 }
 
+func TestParseLLMResponse_MissingSummary_BackfilledFromDescription(t *testing.T) {
+	// The LLM skipped the summary line for item 2 — it must not be shown with
+	// no descriptive text at all; the original RSS description should fill in.
+	response := `1. Первая новость
+   Краткое описание первой новости. URL: https://example.com/1
+2. Вторая новость
+   URL: https://example.com/2`
+
+	items := []models.NewsItem{
+		{ID: "2", Title: "Title 2", Description: "Оригинальное описание второй новости из RSS.", Link: "https://example.com/2"},
+	}
+
+	ranked, err := parseLLMResponse(response, items, 10, nil)
+	if err != nil {
+		t.Fatalf("parseLLMResponse error: %v", err)
+	}
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(ranked))
+	}
+	if ranked[1].Summary == "" {
+		t.Error("expected backfilled summary, got empty string")
+	}
+	if ranked[1].Summary != "Оригинальное описание второй новости из RSS." {
+		t.Errorf("expected summary backfilled from RSS description, got %q", ranked[1].Summary)
+	}
+}
+
+func TestParseLLMResponse_MissingSummary_NoDescription_UsesPlaceholder(t *testing.T) {
+	response := `1. Новость без описания
+   URL: https://example.com/1`
+
+	items := []models.NewsItem{
+		{ID: "1", Title: "Title 1", Description: "", Link: "https://example.com/1"},
+	}
+
+	ranked, err := parseLLMResponse(response, items, 10, nil)
+	if err != nil {
+		t.Fatalf("parseLLMResponse error: %v", err)
+	}
+	if len(ranked) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(ranked))
+	}
+	if ranked[0].Summary != "Подробнее по ссылке" {
+		t.Errorf("expected placeholder summary, got %q", ranked[0].Summary)
+	}
+}
+
 func TestParseLLMResponse_WithCategory(t *testing.T) {
 	response := `1. Новая модель GPT
    Описание про языковую модель. URL: https://example.com/1
@@ -113,10 +160,12 @@ func TestParseLLMResponse_WithCategory(t *testing.T) {
 	}
 }
 
-func TestParseLLMResponse_InvalidCategory_FallsBackToKeyword(t *testing.T) {
-	response := `1. Новая большая языковая модель GPT представлена компанией
-   Подробности о llm модели. URL: https://example.com/1
-   Категория: Развлечения`
+func TestParseLLMResponse_CategoryLabelCaseInsensitive(t *testing.T) {
+	// Models don't reliably preserve the exact casing shown in the prompt's
+	// format example — make sure a lowercase label is still recognized.
+	response := `1. Новая модель GPT
+   Описание про языковую модель. URL: https://example.com/1
+   категория: LLM`
 
 	categories := []string{"AI", "LLM", "Программирование", "IT"}
 
@@ -128,18 +177,37 @@ func TestParseLLMResponse_InvalidCategory_FallsBackToKeyword(t *testing.T) {
 		t.Fatalf("expected 1 item, got %d", len(ranked))
 	}
 	if ranked[0].Category != "LLM" {
-		t.Errorf("expected keyword-classified category LLM, got %q", ranked[0].Category)
+		t.Errorf("expected category LLM despite lowercase label, got %q", ranked[0].Category)
+	}
+}
+
+func TestParseLLMResponse_InvalidCategory_FallsBackToKeyword(t *testing.T) {
+	response := `1. Новая большая языковая модель GPT представлена компанией
+   Подробности о llm модели. URL: https://example.com/1
+   Категория: Развлечения`
+
+	categories := []string{"Большие языковые модели", "Разработка и программирование"}
+
+	ranked, err := parseLLMResponse(response, nil, 10, categories)
+	if err != nil {
+		t.Fatalf("parseLLMResponse error: %v", err)
+	}
+	if len(ranked) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(ranked))
+	}
+	if ranked[0].Category != "Большие языковые модели" {
+		t.Errorf("expected keyword-classified category Большие языковые модели, got %q", ranked[0].Category)
 	}
 }
 
 func TestClassifyCategory(t *testing.T) {
-	categories := []string{"AI", "LLM", "Программирование", "IT"}
+	categories := []string{"Большие языковые модели", "Разработка и программирование"}
 
-	if got := classifyCategory("Вышла новая языковая модель Gemini", "", categories); got != "LLM" {
-		t.Errorf("expected LLM, got %q", got)
+	if got := classifyCategory("Вышла новая языковая модель Gemini", "", categories); got != "Большие языковые модели" {
+		t.Errorf("expected Большие языковые модели, got %q", got)
 	}
-	if got := classifyCategory("Разработчики выложили код на GitHub", "", categories); got != "Программирование" {
-		t.Errorf("expected Программирование, got %q", got)
+	if got := classifyCategory("Разработчики выложили код на GitHub", "", categories); got != "Разработка и программирование" {
+		t.Errorf("expected Разработка и программирование, got %q", got)
 	}
 	if got := classifyCategory("Совершенно не по теме", "", categories); got != "" {
 		t.Errorf("expected no match, got %q", got)

@@ -138,6 +138,41 @@ func TestParseTranslatedDigest_PartialMatch(t *testing.T) {
 	}
 }
 
+func TestParseTranslatedDigest_HeaderCaseInsensitive(t *testing.T) {
+	// Models often mirror the lowercase "Заголовок:" label used in the user
+	// prompt instead of the all-caps "ЗАГОЛОВОК:" requested in the system
+	// prompt — this used to make header translation silently fall back to
+	// the original Russian header.
+	response := `Заголовок: Translated header
+1. Title
+   Summary`
+
+	header, items, ok := parseTranslatedDigest(response, 1)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if header != "Translated header" {
+		t.Errorf("expected header to be recognized despite lowercase label, got %q", header)
+	}
+	if items[0].title != "Title" {
+		t.Errorf("unexpected title[0]: %q", items[0].title)
+	}
+}
+
+func TestParseTranslatedDigest_EnglishHeaderLabelCaseInsensitive(t *testing.T) {
+	response := `header: Translated header
+1. Title
+   Summary`
+
+	header, _, ok := parseTranslatedDigest(response, 1)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if header != "Translated header" {
+		t.Errorf("expected header to be recognized despite lowercase label, got %q", header)
+	}
+}
+
 func TestParseTranslatedDigest_NothingRecognized(t *testing.T) {
 	_, _, ok := parseTranslatedDigest("just some unrelated text", 2)
 	if ok {

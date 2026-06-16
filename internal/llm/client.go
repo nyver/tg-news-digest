@@ -72,9 +72,6 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem, topN 
 	}
 
 	categories := c.cfg.Categories
-	if len(categories) == 0 {
-		categories = DefaultCategories
-	}
 
 	// Sort a copy by date; keep the original for fallback so truncation does not
 	// hide the most recent items when we fall back to sort-by-date.
@@ -126,6 +123,17 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem, topN 
 	if err != nil {
 		c.logger.Warn("llm: parse failed, using fallback", slog.String("error", err.Error()))
 		return createFallback(sorted, topN, categories), false, nil
+	}
+
+	// The LLM sometimes returns fewer items than requested (deduplication,
+	// conservative judgment, etc.). Top up from the full original list so the
+	// digest still reaches topN whenever there's enough fresh material.
+	if before := len(ranked); before < topN {
+		ranked = topUpRanked(ranked, sorted, topN, categories)
+		if len(ranked) > before {
+			c.logger.Info("llm: topped up digest with additional items",
+				slog.Int("llm_items", before), slog.Int("added", len(ranked)-before), slog.Int("total", len(ranked)))
+		}
 	}
 
 	c.logger.Info("llm: parsed ranked items", slog.Int("count", len(ranked)))

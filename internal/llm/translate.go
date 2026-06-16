@@ -4,12 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nyver/tg-news-digest/internal/models"
 )
+
+// headerPrefixRe matches the "ЗАГОЛОВОК:"/"HEADER:" label case-insensitively —
+// models often mirror the casing used in the user prompt's "Заголовок:" label
+// instead of the all-caps form requested in the system prompt.
+var headerPrefixRe = regexp.MustCompile(`(?i)^(?:ЗАГОЛОВОК|HEADER):\s*`)
 
 // isDefaultLanguage reports whether lang means "no translation needed" — the
 // digest is already produced in Russian by the ranking step.
@@ -192,12 +198,11 @@ func parseTranslatedDigest(response string, expected int) (string, []translatedI
 }
 
 // stripHeaderPrefix returns the value after a "ЗАГОЛОВОК:"/"HEADER:" label and
-// true, or "", false if line does not start with such a label.
+// true, or "", false if line does not start with such a label. Matching is
+// case-insensitive since models don't reliably preserve the all-caps form.
 func stripHeaderPrefix(line string) (string, bool) {
-	for _, prefix := range []string{"ЗАГОЛОВОК:", "HEADER:"} {
-		if strings.HasPrefix(line, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(line, prefix)), true
-		}
+	if loc := headerPrefixRe.FindStringIndex(line); loc != nil {
+		return strings.TrimSpace(line[loc[1]:]), true
 	}
 	return "", false
 }

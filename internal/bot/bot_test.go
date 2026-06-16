@@ -87,6 +87,58 @@ func TestNewWithAPI(t *testing.T) {
 	assert.NotNil(t, bot)
 }
 
+func TestCmdStart_SendsHelpWithCommandList(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			gotText = m.Text
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}}
+	bot.cmdStart(ctx, 42, msg)
+
+	// /start must show the command list, not just a bare subscription confirmation.
+	assert.Contains(t, gotText, "/categories")
+	assert.Contains(t, gotText, "/digest")
+	assert.Contains(t, gotText, "/language")
+
+	active, err := bot.store.IsActive(ctx, 42)
+	require.NoError(t, err)
+	assert.True(t, active)
+}
+
+func TestCmdSubscribe_SendsConfirmationOnly(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			gotText = m.Text
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}}
+	bot.cmdSubscribe(ctx, 42, msg)
+
+	assert.NotContains(t, gotText, "/categories")
+	assert.NotContains(t, gotText, "/digest")
+
+	active, err := bot.store.IsActive(ctx, 42)
+	require.NoError(t, err)
+	assert.True(t, active)
+}
+
 func TestBroadcast_NoSubscribers(t *testing.T) {
 	ctx := context.Background()
 	bot := newTestBot(t, nil)
