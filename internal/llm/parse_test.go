@@ -183,6 +183,22 @@ func TestCreateFallback(t *testing.T) {
 	}
 }
 
+func TestCreateFallback_SummaryIsOneOrTwoSentences(t *testing.T) {
+	longDesc := "Первое предложение новости. Второе предложение с деталями. Третье предложение, которое уже не должно попасть в саммари. Четвёртое тоже лишнее."
+	items := []models.NewsItem{
+		{ID: "1", Title: "Title", Description: longDesc, Link: "http://a", PublishedAt: time.Now()},
+	}
+
+	fb := createFallback(items, 10, nil)
+	if len(fb) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(fb))
+	}
+	want := "Первое предложение новости. Второе предложение с деталями."
+	if fb[0].Summary != want {
+		t.Errorf("expected summary capped at 2 sentences, got %q", fb[0].Summary)
+	}
+}
+
 func TestCreateFallback_Empty(t *testing.T) {
 	fb := createFallback(nil, 10, nil)
 	if fb != nil {
@@ -204,6 +220,40 @@ func TestCreateFallback_Limit10(t *testing.T) {
 	fb := createFallback(items, 10, nil)
 	if len(fb) != 10 {
 		t.Errorf("expected 10 fallback items, got %d", len(fb))
+	}
+}
+
+func TestFirstSentences_CapsAtMaxSentences(t *testing.T) {
+	text := "Раз. Два. Три. Четыре."
+	got := firstSentences(text, 2, 200)
+	want := "Раз. Два."
+	if got != want {
+		t.Errorf("firstSentences() = %q, want %q", got, want)
+	}
+}
+
+func TestFirstSentences_FewerSentencesThanMax(t *testing.T) {
+	text := "Единственное предложение."
+	got := firstSentences(text, 2, 200)
+	if got != text {
+		t.Errorf("firstSentences() = %q, want %q", got, text)
+	}
+}
+
+func TestFirstSentences_NoPunctuation_TruncatesByChars(t *testing.T) {
+	text := strings.Repeat("x", 300)
+	got := firstSentences(text, 2, 50)
+	if len([]rune(got)) != 51 { // 50 chars + ellipsis rune
+		t.Errorf("expected truncated text with ellipsis, got len=%d: %q", len([]rune(got)), got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected ellipsis suffix, got %q", got)
+	}
+}
+
+func TestFirstSentences_Empty(t *testing.T) {
+	if got := firstSentences("", 2, 200); got != "" {
+		t.Errorf("expected empty string, got %q", got)
 	}
 }
 

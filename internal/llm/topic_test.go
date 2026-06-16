@@ -168,6 +168,25 @@ func TestFallbackByTopic(t *testing.T) {
 	}
 }
 
+func TestFallbackByTopic_SummaryIsOneOrTwoSentences(t *testing.T) {
+	items := []models.NewsItem{
+		{
+			Title:       "Языковая модель обновилась",
+			Description: "Первое предложение. Второе предложение. Третье — уже лишнее для саммари.",
+			Link:        "http://a", PublishedAt: time.Now(),
+		},
+	}
+
+	got := fallbackByTopic(items, "языковая модель", 10)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(got))
+	}
+	want := "Первое предложение. Второе предложение."
+	if got[0].Summary != want {
+		t.Errorf("expected summary capped at 2 sentences, got %q", got[0].Summary)
+	}
+}
+
 func TestTopicWords(t *testing.T) {
 	words := topicWords("ИИ, в медицине!")
 	found := false

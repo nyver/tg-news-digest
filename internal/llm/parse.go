@@ -21,7 +21,36 @@ var (
 
 	// trailingPunct are characters that LLMs commonly append after a URL.
 	trailingPunct = `.,;:)'"` + "`"
+
+	// sentenceEndRe matches sentence-terminating punctuation followed by
+	// whitespace or end of string, used to build short fallback summaries.
+	sentenceEndRe = regexp.MustCompile(`[.!?…]+(\s|$)`)
 )
+
+// firstSentences returns the first maxSentences sentences of text (split on
+// ., !, ?, …), capped at maxChars runes with an ellipsis if still too long.
+// Used to build a short 1-2 sentence summary when no LLM-generated one is
+// available (i.e. in the no-LLM fallback paths).
+func firstSentences(text string, maxSentences, maxChars int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	cut := text
+	if matches := sentenceEndRe.FindAllStringIndex(text, -1); len(matches) > 0 {
+		idx := len(matches) - 1
+		if len(matches) > maxSentences {
+			idx = maxSentences - 1
+		}
+		cut = strings.TrimSpace(text[:matches[idx][1]])
+	}
+
+	if len([]rune(cut)) > maxChars {
+		return truncateRunes(cut, maxChars) // truncateRunes already appends an ellipsis.
+	}
+	return cut
+}
 
 // parseLLMResponse extracts ranked news items from the LLM's free-text response.
 // Returns an error if structured parsing yields 0 items so the caller can
@@ -193,9 +222,8 @@ func createFallback(items []models.NewsItem, topN int, categories []string) []mo
 		desc := sorted[i].Description
 		if desc == "" {
 			desc = "Подробнее по ссылке"
-		}
-		if len([]rune(desc)) > 200 {
-			desc = truncateRunes(desc, 200) + "…"
+		} else {
+			desc = firstSentences(desc, 2, 200)
 		}
 		result[i] = models.RankedNewsItem{
 			Rank:        i + 1,

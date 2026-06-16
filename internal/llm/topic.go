@@ -95,14 +95,14 @@ If the source material is in English or any other language — translate it full
 
 Если релевантные новости есть, для каждой напиши:
 1. Краткий заголовок на русском языке (до 10 слов)
-2. Подробное описание на русском языке (2-4 предложения)
+2. Краткое саммари на русском языке — РОВНО 1-2 предложения, передающие суть новости. Не пиши больше двух предложений.
 3. Ссылку на источник (оригинальную, без изменений)
 
 Формат вывода — строго нумерованный список:
 1. Заголовок на русском
-   Описание на русском. URL: https://...
+   Саммари в 1-2 предложения. URL: https://...
 2. Заголовок на русском
-   Описание на русском. URL: https://...
+   Саммари в 1-2 предложения. URL: https://...
 
 Не добавляй вступлений, заключений, комментариев.`, maxN, noRelevantSentinel)
 }
@@ -160,9 +160,8 @@ func fallbackByTopic(items []models.NewsItem, topic string, maxN int) []models.R
 		desc := item.Description
 		if desc == "" {
 			desc = "Подробнее по ссылке"
-		}
-		if len([]rune(desc)) > 200 {
-			desc = truncateRunes(desc, 200) + "…"
+		} else {
+			desc = firstSentences(desc, 2, 200)
 		}
 		result[i] = models.RankedNewsItem{
 			Rank:        i + 1,
