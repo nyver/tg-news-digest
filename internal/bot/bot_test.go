@@ -285,6 +285,70 @@ func TestHandleCallback_TogglesCategory(t *testing.T) {
 	assert.Empty(t, cats)
 }
 
+func TestCmdDigestTopic_Success(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	bot.SetTopicDigestFunc(func(ctx context.Context, topic string) ([]models.RankedNewsItem, bool, error) {
+		assert.Equal(t, "нейросети", topic)
+		return []models.RankedNewsItem{
+			{Rank: 1, Title: "Новость про нейросети", Summary: "S", Link: "https://x.com"},
+		}, true, nil
+	})
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}}
+	bot.cmdDigestTopic(ctx, msg, "нейросети")
+
+	mockAPI.AssertCalled(t, "Send", mock.Anything)
+}
+
+func TestCmdDigestTopic_NothingFound(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	bot.SetTopicDigestFunc(func(ctx context.Context, topic string) ([]models.RankedNewsItem, bool, error) {
+		return nil, true, nil
+	})
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			gotText = m.Text
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}}
+	bot.cmdDigestTopic(ctx, msg, "космос")
+
+	assert.Contains(t, gotText, "Не нашёл новостей")
+}
+
+func TestCmdDigestTopic_NoHandlerConfigured(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			gotText = m.Text
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}}
+	bot.cmdDigestTopic(ctx, msg, "космос")
+
+	assert.Contains(t, gotText, "временно недоступен")
+}
+
 func TestBroadcast_ConcurrentSafe(t *testing.T) {
 	ctx := context.Background()
 	mockAPI := new(mockTGAPI)

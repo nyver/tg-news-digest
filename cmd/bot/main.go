@@ -81,6 +81,20 @@ func main() {
 	}
 	b := botRef
 
+	// Wire the on-demand "/digest <тема>" handler: it reuses already-fetched
+	// items from storage instead of re-polling RSS feeds, and asks the LLM to
+	// filter by relevance rather than rank a fixed top-N.
+	b.SetTopicDigestFunc(func(ctx context.Context, topic string) ([]models.RankedNewsItem, bool, error) {
+		recent, err := store.GetRecentItems(ctx, 500)
+		if err != nil {
+			return nil, false, fmt.Errorf("topic digest: get recent items: %w", err)
+		}
+		if len(recent) == 0 {
+			return nil, false, nil
+		}
+		return llmClient.RankByTopic(ctx, recent, topic, cfg.App.DigestTopN)
+	})
+
 	// Initialize healthcheck
 	hc := healthcheck.New(*cfg, store, logger).WithPort(cfg.App.HealthPort)
 	_, healthShutdown := hc.StartHTTPServer(ctx)

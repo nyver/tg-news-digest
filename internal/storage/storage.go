@@ -255,6 +255,36 @@ func (s *Store) SaveItems(ctx context.Context, items []models.NewsItem, ttl time
 	return tx.Commit()
 }
 
+// GetRecentItems returns up to limit non-expired fetched items, most recent first.
+// Used for on-demand topic digests so they don't need to re-fetch RSS feeds.
+func (s *Store) GetRecentItems(ctx context.Context, limit int) ([]models.NewsItem, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, title, description, link, published_at, feed_url
+		 FROM fetched_items WHERE expires_at > CURRENT_TIMESTAMP
+		 ORDER BY published_at DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []models.NewsItem
+	for rows.Next() {
+		var item models.NewsItem
+		if err := rows.Scan(&item.ID, &item.Title, &item.Description, &item.Link, &item.PublishedAt, &item.FeedURL); err != nil {
+			return nil, err
+		}
+		item.PublishedAt = item.PublishedAt.UTC()
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 // CleanupExpired removes expired fetched items.
 func (s *Store) CleanupExpired(ctx context.Context) (int, error) {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM fetched_items WHERE expires_at <= CURRENT_TIMESTAMP`)

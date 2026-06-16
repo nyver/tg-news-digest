@@ -44,15 +44,35 @@ func (f *Formatter) Digest(items []models.RankedNewsItem, date time.Time) string
 // The header is always in the first chunk; each news item is kept intact.
 // If a single item alone exceeds maxLen it is truncated with an ellipsis.
 func (f *Formatter) DigestParts(items []models.RankedNewsItem, date time.Time) []string {
+	header := DigestHeader(date, f.mode, f.topN)
+	return f.partsWithHeader(header, items)
+}
+
+// TopicDigestParts splits a topic-filtered digest into Telegram-safe chunks,
+// using a custom plain-text header (escaped/wrapped per the formatter's mode)
+// instead of the standard date-based "Топ-N" header.
+func (f *Formatter) TopicDigestParts(rawHeader string, items []models.RankedNewsItem) []string {
+	var header string
+	switch f.mode {
+	case HTML:
+		header = fmt.Sprintf("<b>%s</b>", escapeHTML(stripHTML(rawHeader)))
+	case MarkdownV2:
+		header = fmt.Sprintf("*%s*", escapeMD(rawHeader))
+	default:
+		header = rawHeader
+	}
+	return f.partsWithHeader(header, items)
+}
+
+// partsWithHeader splits items into Telegram-safe chunks (≤4096 runes each),
+// keeping the given pre-formatted header in the first chunk. Each news item
+// is kept intact; a single item that alone exceeds the limit is truncated.
+func (f *Formatter) partsWithHeader(header string, items []models.RankedNewsItem) []string {
 	const maxLen = 4096
 
-	header := DigestHeader(date, f.mode, f.topN)
-
-	// Build per-item strings with correct rank numbers.
 	itemStrings := make([]string, len(items))
 	for i, item := range items {
 		itemStrings[i] = digestBodyItem(item, i+1, f.mode)
-		// Guard: a single item that exceeds the limit is truncated.
 		if runes := []rune(itemStrings[i]); len(runes) > maxLen {
 			itemStrings[i] = string(runes[:maxLen-1]) + "…"
 		}
@@ -229,14 +249,16 @@ func StartMessage(mode ParseMode) string {
 		return `<b>Привет! Я бот дайджеста новостей.</b>
 Отправь <code>/subscribe</code> чтобы подписаться на ежедневный дайджест.
 Отправь <code>/unsubscribe</code> чтобы отписаться.
-Отправь <code>/categories</code> чтобы выбрать интересующие темы.`
+Отправь <code>/categories</code> чтобы выбрать интересующие темы.
+Отправь <code>/digest тема</code> чтобы получить новости по конкретному запросу, например <code>/digest нейросети в медицине</code>.`
 	case MarkdownV2:
 		return `*Привет! Я бот дайджеста новостей.*
 Отправь /subscribe чтобы подписаться на ежедневный дайджест.
 Отправь /unsubscribe чтобы отписаться.
-Отправь /categories чтобы выбрать интересующие темы.`
+Отправь /categories чтобы выбрать интересующие темы.
+Отправь /digest тема чтобы получить новости по конкретному запросу.`
 	default:
-		return "Привет! Я бот дайджеста новостей.\n\nОтправь /subscribe чтобы подписаться на ежедневный дайджест.\nОтправь /unsubscribe чтобы отписаться.\nОтправь /categories чтобы выбрать интересующие темы."
+		return "Привет! Я бот дайджеста новостей.\n\nОтправь /subscribe чтобы подписаться на ежедневный дайджест.\nОтправь /unsubscribe чтобы отписаться.\nОтправь /categories чтобы выбрать интересующие темы.\nОтправь /digest тема чтобы получить новости по конкретному запросу."
 	}
 }
 

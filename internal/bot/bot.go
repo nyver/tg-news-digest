@@ -20,6 +20,11 @@ import (
 // BroadcastFunc is called by the bot to run the full digest pipeline + broadcast.
 type BroadcastFunc func(ctx context.Context) error
 
+// TopicDigestFunc selects and summarizes news relevant to a free-text topic
+// requested via "/digest <тема>". The returned slice may legitimately be
+// empty (nothing relevant found) without that being an error.
+type TopicDigestFunc func(ctx context.Context, topic string) ([]models.RankedNewsItem, bool, error)
+
 // TGAPI defines the minimal subset of telegram-bot-api needed by Bot.
 // This interface allows mocking in tests.
 type TGAPI interface {
@@ -37,6 +42,14 @@ type Bot struct {
 	logger      *slog.Logger
 	ownerID     int64
 	categories  []string
+	topicFn     TopicDigestFunc
+}
+
+// SetTopicDigestFunc wires the callback used to answer "/digest <тема>"
+// requests. Must be called after construction since the callback typically
+// closes over the bot itself (e.g. to access store/llm client built in main).
+func (b *Bot) SetTopicDigestFunc(fn TopicDigestFunc) {
+	b.topicFn = fn
 }
 
 // New creates a new Bot.
@@ -196,7 +209,11 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 	case "unsubscribe":
 		b.cmdUnsubscribe(ctx, chatID, msg)
 	case "digest":
-		b.cmdDigest(ctx, msg)
+		if topic := strings.TrimSpace(msg.CommandArguments()); topic != "" {
+			b.cmdDigestTopic(ctx, msg, topic)
+		} else {
+			b.cmdDigest(ctx, msg)
+		}
 	case "status":
 		b.cmdStatus(ctx, chatID, msg)
 	case "categories":
@@ -256,6 +273,46 @@ func (b *Bot) cmdDigest(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 	b.reply(ctx, msg, "✅ Дайджест успешно отправлен подписчикам.")
+}
+
+// cmdDigestTopic handles "/digest <тема>": any user can request an on-demand
+// digest scoped to a free-text topic. Unlike cmdDigest, this does not require
+// the owner and does not broadcast — the result is sent only to the requester.
+func (b *Bot) cmdDigestTopic(ctx context.Context, msg *tgbotapi.Message, topic string) {
+	chatID := msg.Chat.ID
+
+	if b.topicFn == nil {
+		b.reply(ctx, msg, "❌ Тематический дайджест временно недоступен.")
+		return
+	}
+
+	b.reply(ctx, msg, fmt.Sprintf("🔎 Ищу новости по теме «%s»...", topic))
+
+	ranked, llmUsed, err := b.topicFn(ctx, topic)
+	if err != nil {
+		b.logger.Warn("bot: topic digest failed",
+			slog.Int64("chat_id", chatID), slog.String("topic", topic), slog.String("error", err.Error()))
+		b.reply(ctx, msg, fmt.Sprintf("❌ Не удалось собрать дайджест по теме «%s».", topic))
+		return
+	}
+
+	if len(ranked) == 0 {
+		b.reply(ctx, msg, fmt.Sprintf("ℹ️ Не нашёл новостей по теме «%s» за последние сутки.", topic))
+		return
+	}
+
+	header := fmt.Sprintf("🔎 Новости по теме «%s»", topic)
+	if !llmUsed {
+		header += " (по ключевым словам)"
+	}
+
+	for _, part := range b.formatter.TopicDigestParts(header, ranked) {
+		if err := b.SendRaw(ctx, chatID, part); err != nil {
+			b.logger.Warn("bot: send topic digest part failed",
+				slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+			return
+		}
+	}
 }
 
 // cmdCategories shows the category selection keyboard for the chat.

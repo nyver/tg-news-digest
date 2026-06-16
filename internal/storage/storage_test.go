@@ -190,6 +190,49 @@ func TestGetLastRun_NoRuns(t *testing.T) {
 	assert.Nil(t, last)
 }
 
+func TestGetRecentItems(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	older := models.NewsItem{
+		ID: "old", Title: "Old item", Description: "D", Link: "https://example.com/old",
+		PublishedAt: time.Now().Add(-2 * time.Hour), FeedURL: "https://example.com/feed.xml",
+	}
+	newer := models.NewsItem{
+		ID: "new", Title: "New item", Description: "D", Link: "https://example.com/new",
+		PublishedAt: time.Now().Add(-1 * time.Minute), FeedURL: "https://example.com/feed.xml",
+	}
+
+	require.NoError(t, s.SaveItems(ctx, []models.NewsItem{older, newer}, 24*time.Hour))
+
+	items, err := s.GetRecentItems(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	// Most recent first.
+	assert.Equal(t, "new", items[0].ID)
+	assert.Equal(t, "old", items[1].ID)
+}
+
+func TestGetRecentItems_ExcludesExpired(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	expired := models.NewsItem{
+		ID: "expired", Title: "Expired", Description: "D", Link: "https://example.com/expired",
+		PublishedAt: time.Now(), FeedURL: "https://example.com/feed.xml",
+	}
+	require.NoError(t, s.SaveItems(ctx, []models.NewsItem{expired}, time.Hour))
+
+	// Force the item into the past so it is treated as expired.
+	_, err := s.DB().ExecContext(ctx,
+		`UPDATE fetched_items SET expires_at = datetime('now', '-1 hour') WHERE id = ?`, "expired")
+	require.NoError(t, err)
+
+	items, err := s.GetRecentItems(ctx, 0)
+	require.NoError(t, err)
+	assert.Empty(t, items)
+}
+
 func TestSubscriberCategories_DefaultEmpty(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
