@@ -113,6 +113,9 @@ func Validate(cfg *Config) error {
 	if cfg.Bot.Token == "" {
 		return fmt.Errorf("bot.token is required")
 	}
+	if cfg.Bot.MTProxy.Enabled {
+		return fmt.Errorf("bot.mtproxy.enabled is not supported by the current Telegram client")
+	}
 	if len(cfg.RSS.Feeds) == 0 {
 		return fmt.Errorf("rss.feeds must contain at least one feed URL")
 	}

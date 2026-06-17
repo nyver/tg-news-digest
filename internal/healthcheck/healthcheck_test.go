@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/nyver/tg-news-digest/internal/config"
 	"github.com/nyver/tg-news-digest/internal/storage"
 	"github.com/stretchr/testify/assert"
@@ -148,6 +147,7 @@ func TestCheck_LLMEmptyEndpoint(t *testing.T) {
 func TestCheck_LLMProviderEmptyDefaultsToLlama(t *testing.T) {
 	// Use a mock server that returns 200
 	mockLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/chat/completions", r.URL.Path)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"choices":[]}`))
 	}))
@@ -158,13 +158,31 @@ func TestCheck_LLMProviderEmptyDefaultsToLlama(t *testing.T) {
 			Provider: "", // empty → defaults to llama-cpp
 			Endpoint: mockLLM.URL,
 		},
-		httpCli: resty.New().SetTimeout(time.Second).SetBaseURL(mockLLM.URL),
 	}
 
 	ctx := context.Background()
 	check := checker.checkLLM(ctx)
 	// Should attempt llama-cpp request and return "ok" (200 status)
 	assert.Equal(t, "ok", check.Status)
+}
+
+func TestCheck_LLMUnexpectedClientStatusIsError(t *testing.T) {
+	mockLLM := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"bad token"}`))
+	}))
+	defer mockLLM.Close()
+
+	checker := &Checker{
+		llmCfg: config.LLMConfig{
+			Provider: "llama-cpp",
+			Endpoint: mockLLM.URL,
+		},
+	}
+
+	check := checker.checkLLM(context.Background())
+	assert.Equal(t, "error", check.Status)
+	assert.Contains(t, check.Message, "401")
 }
 
 func TestCheck_TelegramEmptyToken(t *testing.T) {

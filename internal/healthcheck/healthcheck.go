@@ -39,7 +39,6 @@ type Checker struct {
 	store   *storage.Store
 	llmCfg  config.LLMConfig
 	botCfg  config.BotConfig
-	httpCli *resty.Client
 	logger  *slog.Logger
 	started time.Time
 	port    int
@@ -51,7 +50,6 @@ func New(cfg config.Config, store *storage.Store, logger *slog.Logger) *Checker 
 		store:   store,
 		llmCfg:  cfg.LLM,
 		botCfg:  cfg.Bot,
-		httpCli: resty.New().SetTimeout(10 * time.Second),
 		logger:  logger,
 		started: time.Now(),
 		port:    9100, // default health check port
@@ -168,6 +166,8 @@ func (hc *Checker) checkLLM(ctx context.Context) Check {
 
 	var reqBody map[string]interface{}
 	var headers map[string]string
+	var httpCli *resty.Client
+	var path string
 
 	switch provider {
 	case "openrouter":
@@ -182,6 +182,11 @@ func (hc *Checker) checkLLM(ctx context.Context) Check {
 			"max_tokens": 5,
 			"stream":     false,
 		}
+		httpCli = resty.New().
+			SetBaseURL("https://openrouter.ai/api/v1").
+			SetHeaders(headers).
+			SetTimeout(10 * time.Second)
+		path = "/chat/completions"
 	default:
 		if hc.llmCfg.Endpoint == "" {
 			return Check{
@@ -196,20 +201,16 @@ func (hc *Checker) checkLLM(ctx context.Context) Check {
 			"max_tokens": 5,
 			"stream":     false,
 		}
-	}
-
-	httpCli := hc.httpCli
-	if provider == "openrouter" {
 		httpCli = resty.New().
-			SetBaseURL("https://openrouter.ai/api/v1").
-			SetHeaders(headers).
+			SetBaseURL(hc.llmCfg.Endpoint).
 			SetTimeout(10 * time.Second)
+		path = "/v1/chat/completions"
 	}
 
 	resp, err := httpCli.R().
 		SetContext(ctx).
 		SetBody(reqBody).
-		Post("/chat/completions")
+		Post(path)
 
 	c := Check{Duration: time.Since(start).String()}
 	if err != nil {
@@ -224,12 +225,20 @@ func (hc *Checker) checkLLM(ctx context.Context) Check {
 		return c
 	}
 
-	// 400 (bad model) or 200 both mean the server is reachable
-	c.Status = "ok"
-	if resp.StatusCode() == 400 {
-		c.Message = "server reachable (model not found — expected for minimal ping)"
+	if resp.StatusCode() == http.StatusOK {
+		c.Status = "ok"
+		return c
 	}
 
+	// 400 (bad model) means the server is reachable for this minimal ping.
+	if resp.StatusCode() == http.StatusBadRequest {
+		c.Status = "ok"
+		c.Message = "server reachable (model not found — expected for minimal ping)"
+		return c
+	}
+
+	c.Status = "error"
+	c.Message = fmt.Sprintf("unexpected HTTP status: %d", resp.StatusCode())
 	return c
 }
 

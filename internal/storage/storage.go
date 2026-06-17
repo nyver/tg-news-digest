@@ -329,8 +329,16 @@ func (s *Store) SaveItems(ctx context.Context, items []models.NewsItem, ttl time
 	}
 	defer stmt.Close()
 
+	ttlSeconds := int64(ttl / time.Second)
+	if ttl%time.Second != 0 {
+		ttlSeconds++
+	}
+	if ttlSeconds <= 0 {
+		ttlSeconds = 1
+	}
+	ttlStr := fmt.Sprintf("+%d seconds", ttlSeconds)
+
 	for _, item := range items {
-		ttlStr := fmt.Sprintf("+%d hours", int(ttl.Hours()))
 		_, err := stmt.ExecContext(ctx,
 			item.ID, item.Title, item.Description, item.Link,
 			item.PublishedAt.UTC().Format("2006-01-02 15:04:05"),

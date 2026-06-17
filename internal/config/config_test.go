@@ -125,6 +125,25 @@ rss:
 	assert.Contains(t, err.Error(), "parse_mode")
 }
 
+func TestValidate_MTProxyUnsupported(t *testing.T) {
+	yaml := `bot:
+  token: "test"
+  mtproxy:
+    enabled: true
+    host: "proxy.example.com"
+rss:
+  feeds: ["https://example.com"]
+`
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	err := os.WriteFile(cfgPath, []byte(yaml), 0644)
+	require.NoError(t, err)
+
+	_, err = Load(cfgPath)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "mtproxy")
+}
+
 func TestValidate_MissingCron(t *testing.T) {
 	yaml := `bot:
   token: "test"

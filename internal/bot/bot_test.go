@@ -337,6 +337,50 @@ func TestBroadcast_CustomCategoryFiltering_MatchesItemText(t *testing.T) {
 	assert.NotContains(t, gotText, "Language model")
 }
 
+func TestBroadcast_CustomCategoryFiltering_UsesOriginalTextForTranslatedDigest(t *testing.T) {
+	ctx := context.Background()
+	mockAPI := new(mockTGAPI)
+	store := newTestStore(t)
+
+	require.NoError(t, store.SaveSubscriber(ctx, 100))
+	require.NoError(t, store.SetSubscriberLanguage(ctx, 100, "English"))
+	require.NoError(t, store.AddSubscriberCategory(ctx, 100, "нейросети"))
+
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
+	require.NoError(t, err)
+
+	bot.SetTranslateFunc(func(ctx context.Context, items []models.RankedNewsItem, header, lang string) ([]models.RankedNewsItem, string, error) {
+		translated := make([]models.RankedNewsItem, len(items))
+		copy(translated, items)
+		translated[0].Title = "Neural network update"
+		translated[0].Summary = "English summary"
+		translated[1].Title = "Compiler release"
+		translated[1].Summary = "Another English summary"
+		return translated, "Translated header", nil
+	})
+
+	items := []models.RankedNewsItem{
+		{Rank: 1, Title: "Новая модель нейросети", Summary: "Русское описание", Link: "https://x.com/1", Category: "Other"},
+		{Rank: 2, Title: "Релиз компилятора", Summary: "Русское описание", Link: "https://x.com/2", Category: "Other"},
+	}
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		msg, ok := c.(tgbotapi.MessageConfig)
+		if ok {
+			gotText = msg.Text
+		}
+		return ok
+	})).Return(tgbotapi.Message{}, nil).Once()
+
+	err = bot.Broadcast(ctx, items, time.Now())
+	require.NoError(t, err)
+
+	assert.Contains(t, gotText, "Neural network update")
+	assert.NotContains(t, gotText, "Compiler release")
+}
+
 func TestHandleCallback_TogglesCategory(t *testing.T) {
 	ctx := context.Background()
 	mockAPI := new(mockTGAPI)

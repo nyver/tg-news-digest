@@ -77,6 +77,55 @@ func TestScheduler_AddJob(t *testing.T) {
 	}
 }
 
+func TestScheduler_StopWaitsForRunningJob(t *testing.T) {
+	cfg := config.ScheduleConfig{
+		Cron:     "0 9 * * *",
+		Timezone: "UTC",
+	}
+
+	s, err := New(cfg, slog.Default())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if err := s.AddJob("@every 1s", func(ctx context.Context) error {
+		close(started)
+		<-release
+		return nil
+	}); err != nil {
+		t.Fatalf("AddJob() error = %v", err)
+	}
+
+	s.Start()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("job did not start")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		s.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before running job completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after running job completed")
+	}
+}
+
 func TestScheduler_RunCallback(t *testing.T) {
 	t.Skip("slow test: waits for cron to fire")
 	cfg := config.ScheduleConfig{

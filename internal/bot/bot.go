@@ -668,6 +668,23 @@ func filterByCategories(items []models.RankedNewsItem, cats []string) []models.R
 	return filtered
 }
 
+func filterTranslatedBySource(display, source []models.RankedNewsItem, cats []string) []models.RankedNewsItem {
+	if len(display) != len(source) {
+		return filterByCategories(display, cats)
+	}
+
+	filtered := make([]models.RankedNewsItem, 0, len(display))
+	for i, item := range source {
+		for _, cat := range cats {
+			if itemMatchesCategory(item, cat) {
+				filtered = append(filtered, display[i])
+				break
+			}
+		}
+	}
+	return filtered
+}
+
 func itemMatchesCategory(item models.RankedNewsItem, category string) bool {
 	category = strings.TrimSpace(category)
 	if category == "" {
@@ -802,7 +819,7 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 					b.logger.Warn("bot: get subscriber categories failed",
 						slog.Int64("chat_id", id), slog.String("error", err.Error()))
 				} else if len(cats) > 0 {
-					filtered = filterByCategories(langItems, cats)
+					filtered = filterTranslatedBySource(langItems, items, cats)
 				}
 				if len(filtered) == 0 {
 					return

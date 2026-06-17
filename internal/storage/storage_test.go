@@ -95,6 +95,26 @@ func TestFetchedItems(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+func TestFetchedItems_SubHourTTLDoesNotExpireImmediately(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	item := models.NewsItem{
+		ID:          "short-ttl",
+		Title:       "Short TTL",
+		Description: "D",
+		Link:        "https://example.com/short",
+		PublishedAt: time.Now(),
+		FeedURL:     "https://example.com/feed.xml",
+	}
+
+	require.NoError(t, s.SaveItems(ctx, []models.NewsItem{item}, 30*time.Minute))
+
+	exists, err := s.ItemExists(ctx, "short-ttl")
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
 func TestFetchedItems_Dedup(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

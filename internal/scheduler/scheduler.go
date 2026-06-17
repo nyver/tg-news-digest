@@ -16,9 +16,9 @@ type RunFunc func(ctx context.Context) error
 
 // Scheduler manages the cron-based daily digest schedule.
 type Scheduler struct {
-	cron   *cron.Cron
+	cron    *cron.Cron
 	entryID cron.EntryID
-	logger *slog.Logger
+	logger  *slog.Logger
 }
 
 // New creates a new Scheduler with the given cron expression and timezone.
@@ -61,7 +61,8 @@ func (s *Scheduler) Start() {
 
 // Stop gracefully stops the scheduler, waiting for any running job to finish.
 func (s *Scheduler) Stop() {
-	s.cron.Stop()
+	ctx := s.cron.Stop()
+	<-ctx.Done()
 	s.logger.Info("scheduler: stopped")
 }
 
