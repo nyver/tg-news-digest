@@ -231,7 +231,26 @@ func (s *Store) GetActiveChats(ctx context.Context) ([]int64, error) {
 
 // AddSubscriberCategory marks a chat as interested in the given category.
 func (s *Store) AddSubscriberCategory(ctx context.Context, chatID int64, category string) error {
-	_, err := s.db.ExecContext(ctx,
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return nil
+	}
+
+	var existing string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT category FROM subscriber_categories
+		 WHERE chat_id = ? AND lower(category) = lower(?)
+		 LIMIT 1`,
+		chatID, category,
+	).Scan(&existing)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil {
+		return nil
+	}
+
+	_, err = s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO subscriber_categories (chat_id, category) VALUES (?, ?)`,
 		chatID, category,
 	)
@@ -240,8 +259,13 @@ func (s *Store) AddSubscriberCategory(ctx context.Context, chatID int64, categor
 
 // RemoveSubscriberCategory removes a chat's interest in the given category.
 func (s *Store) RemoveSubscriberCategory(ctx context.Context, chatID int64, category string) error {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return nil
+	}
+
 	_, err := s.db.ExecContext(ctx,
-		`DELETE FROM subscriber_categories WHERE chat_id = ? AND category = ?`,
+		`DELETE FROM subscriber_categories WHERE chat_id = ? AND lower(category) = lower(?)`,
 		chatID, category,
 	)
 	return err

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -233,6 +234,10 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.cmdStatus(ctx, chatID, msg)
 	case "categories":
 		b.cmdCategories(ctx, chatID, msg)
+	case "addcategory":
+		b.cmdAddCategory(ctx, chatID, msg)
+	case "removecategory":
+		b.cmdRemoveCategory(ctx, chatID, msg)
 	case "language":
 		b.cmdLanguage(ctx, chatID, msg)
 	default:
@@ -350,6 +355,50 @@ func (b *Bot) cmdDigestTopic(ctx context.Context, msg *tgbotapi.Message, topic s
 	}
 }
 
+// cmdAddCategory adds a user-defined category/topic to the chat preferences.
+func (b *Bot) cmdAddCategory(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
+	category, err := normalizeUserCategory(msg.CommandArguments())
+	if err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("❌ %v\nПример: /addcategory AI agents", err))
+		return
+	}
+
+	if err := b.store.AddSubscriberCategory(ctx, chatID, category); err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка добавления категории: %v", err))
+		return
+	}
+	b.reply(ctx, msg, fmt.Sprintf("✅ Категория добавлена: %s", category))
+}
+
+// cmdRemoveCategory removes a category/topic from the chat preferences.
+func (b *Bot) cmdRemoveCategory(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
+	category, err := normalizeUserCategory(msg.CommandArguments())
+	if err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("❌ %v\nПример: /removecategory AI agents", err))
+		return
+	}
+
+	if err := b.store.RemoveSubscriberCategory(ctx, chatID, category); err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка удаления категории: %v", err))
+		return
+	}
+	b.reply(ctx, msg, fmt.Sprintf("✅ Категория удалена: %s", category))
+}
+
+func normalizeUserCategory(raw string) (string, error) {
+	category := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if category == "" {
+		return "", fmt.Errorf("укажите название категории")
+	}
+	if strings.HasPrefix(category, "/") {
+		return "", fmt.Errorf("категория не должна быть командой")
+	}
+	if len([]rune(category)) > 50 {
+		return "", fmt.Errorf("категория слишком длинная, максимум 50 символов")
+	}
+	return category, nil
+}
+
 // cmdLanguage shows or changes the chat's digest language preference.
 // "/language" alone reports the current setting; "/language <язык>" sets it.
 // Any free-text language name is accepted — translation is done by the LLM,
@@ -414,8 +463,13 @@ func (b *Bot) cmdCategories(ctx context.Context, chatID int64, msg *tgbotapi.Mes
 			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
 	}
 
-	cfg := tgbotapi.NewMessage(chatID,
-		"📂 Выберите интересующие категории новостей (нажмите, чтобы включить/выключить).\nЕсли ничего не выбрано — вы получаете дайджест по всем темам.")
+	custom := customCategories(selected, b.categories)
+	text := "📂 Выберите интересующие категории новостей (нажмите, чтобы включить/выключить).\nЕсли ничего не выбрано — вы получаете дайджест по всем темам.\n\nСвои темы можно добавить командой /addcategory <тема> и удалить командой /removecategory <тема>."
+	if len(custom) > 0 {
+		text += "\n\nВаши категории:\n" + formatCategoryList(custom)
+	}
+
+	cfg := tgbotapi.NewMessage(chatID, text)
 	cfg.ReplyMarkup = b.buildCategoriesKeyboard(selected)
 	cfg.ReplyToMessageID = msg.MessageID
 
@@ -444,6 +498,37 @@ func (b *Bot) buildCategoriesKeyboard(selected []string) tgbotapi.InlineKeyboard
 		))
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func customCategories(selected, configured []string) []string {
+	configuredSet := make(map[string]bool, len(configured))
+	for _, c := range configured {
+		configuredSet[strings.ToLower(strings.TrimSpace(c))] = true
+	}
+
+	var custom []string
+	for _, c := range selected {
+		c = strings.TrimSpace(c)
+		if c != "" && !configuredSet[strings.ToLower(c)] {
+			custom = append(custom, c)
+		}
+	}
+	sort.Slice(custom, func(i, j int) bool {
+		return strings.ToLower(custom[i]) < strings.ToLower(custom[j])
+	})
+	return custom
+}
+
+func formatCategoryList(categories []string) string {
+	var sb strings.Builder
+	for i, c := range categories {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString("• ")
+		sb.WriteString(c)
+	}
+	return sb.String()
 }
 
 // handleCallback processes inline keyboard button presses (currently only
@@ -549,20 +634,52 @@ func (b *Bot) reply(ctx context.Context, msg *tgbotapi.Message, text string) {
 }
 
 // filterByCategories returns the items whose Category matches one of cats
-// (case-insensitive). Items with no category never match a non-empty filter.
+// (case-insensitive) or whose text matches a user-defined category/topic.
 func filterByCategories(items []models.RankedNewsItem, cats []string) []models.RankedNewsItem {
-	wanted := make(map[string]bool, len(cats))
-	for _, c := range cats {
-		wanted[strings.ToLower(c)] = true
-	}
-
 	filtered := make([]models.RankedNewsItem, 0, len(items))
 	for _, item := range items {
-		if item.Category != "" && wanted[strings.ToLower(item.Category)] {
-			filtered = append(filtered, item)
+		for _, cat := range cats {
+			if itemMatchesCategory(item, cat) {
+				filtered = append(filtered, item)
+				break
+			}
 		}
 	}
 	return filtered
+}
+
+func itemMatchesCategory(item models.RankedNewsItem, category string) bool {
+	category = strings.TrimSpace(category)
+	if category == "" {
+		return false
+	}
+	if item.Category != "" && strings.EqualFold(item.Category, category) {
+		return true
+	}
+
+	words := categoryWords(category)
+	if len(words) == 0 {
+		return false
+	}
+
+	text := strings.ToLower(item.Title + " " + item.Summary)
+	for _, word := range words {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func categoryWords(category string) []string {
+	var words []string
+	for _, word := range strings.Fields(strings.ToLower(category)) {
+		word = strings.Trim(word, ".,!?;:()\"'«»[]{}")
+		if len([]rune(word)) >= 3 {
+			words = append(words, word)
+		}
+	}
+	return words
 }
 
 // SendRaw sends a message to a chat ID without reply.

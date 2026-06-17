@@ -304,6 +304,39 @@ func TestBroadcast_CategoryFiltering_NoMatch_SkipsChat(t *testing.T) {
 	mockAPI.AssertNotCalled(t, "Send", mock.Anything)
 }
 
+func TestBroadcast_CustomCategoryFiltering_MatchesItemText(t *testing.T) {
+	ctx := context.Background()
+	mockAPI := new(mockTGAPI)
+	store := newTestStore(t)
+
+	require.NoError(t, store.SaveSubscriber(ctx, 100))
+	require.NoError(t, store.AddSubscriberCategory(ctx, 100, "robotics"))
+
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(mockAPI, config.BotConfig{}, fmttr, store, nil, slog.Default())
+	require.NoError(t, err)
+
+	items := []models.RankedNewsItem{
+		{Rank: 1, Title: "Robotics lab launches humanoid platform", Summary: "S", Link: "https://x.com/1", Category: "Other"},
+		{Rank: 2, Title: "Language model update", Summary: "S", Link: "https://x.com/2", Category: "AI"},
+	}
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		msg, ok := c.(tgbotapi.MessageConfig)
+		if ok {
+			gotText = msg.Text
+		}
+		return ok
+	})).Return(tgbotapi.Message{}, nil).Once()
+
+	err = bot.Broadcast(ctx, items, time.Now())
+	require.NoError(t, err)
+
+	assert.Contains(t, gotText, "Robotics")
+	assert.NotContains(t, gotText, "Language model")
+}
+
 func TestHandleCallback_TogglesCategory(t *testing.T) {
 	ctx := context.Background()
 	mockAPI := new(mockTGAPI)
@@ -336,6 +369,61 @@ func TestHandleCallback_TogglesCategory(t *testing.T) {
 	cats, err = store.GetSubscriberCategories(ctx, 42)
 	require.NoError(t, err)
 	assert.Empty(t, cats)
+}
+
+func TestCmdAddAndRemoveCategory(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	addMsg := &tgbotapi.Message{
+		MessageID: 1,
+		Chat:      &tgbotapi.Chat{ID: 42},
+		Text:      "/addcategory AI agents",
+		Entities:  []tgbotapi.MessageEntity{{Type: "bot_command", Offset: 0, Length: 12}},
+	}
+	bot.cmdAddCategory(ctx, 42, addMsg)
+
+	cats, err := bot.store.GetSubscriberCategories(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"AI agents"}, cats)
+
+	removeMsg := &tgbotapi.Message{
+		MessageID: 2,
+		Chat:      &tgbotapi.Chat{ID: 42},
+		Text:      "/removecategory ai AGENTS",
+		Entities:  []tgbotapi.MessageEntity{{Type: "bot_command", Offset: 0, Length: 15}},
+	}
+	bot.cmdRemoveCategory(ctx, 42, removeMsg)
+
+	cats, err = bot.store.GetSubscriberCategories(ctx, 42)
+	require.NoError(t, err)
+	assert.Empty(t, cats)
+}
+
+func TestCmdCategories_ShowsCustomCategories(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	require.NoError(t, bot.store.AddSubscriberCategory(ctx, 42, "AI agents"))
+
+	var gotText string
+	mockAPI.On("Send", mock.MatchedBy(func(c tgbotapi.Chattable) bool {
+		if m, ok := c.(tgbotapi.MessageConfig); ok {
+			gotText = m.Text
+			return true
+		}
+		return false
+	})).Return(tgbotapi.Message{}, nil)
+
+	msg := &tgbotapi.Message{MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}}
+	bot.cmdCategories(ctx, 42, msg)
+
+	assert.Contains(t, gotText, "/addcategory")
+	assert.Contains(t, gotText, "AI agents")
 }
 
 func TestCmdDigestTopic_Success(t *testing.T) {

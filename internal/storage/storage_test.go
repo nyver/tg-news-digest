@@ -309,6 +309,23 @@ func TestSubscriberCategories_AddRemove(t *testing.T) {
 	assert.Equal(t, []string{"IT"}, cats)
 }
 
+func TestSubscriberCategories_NormalizesCaseInsensitiveDuplicates(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.AddSubscriberCategory(ctx, 555, " AI agents "))
+	require.NoError(t, s.AddSubscriberCategory(ctx, 555, "ai agents"))
+
+	cats, err := s.GetSubscriberCategories(ctx, 555)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"AI agents"}, cats)
+
+	require.NoError(t, s.RemoveSubscriberCategory(ctx, 555, "AI AGENTS"))
+	cats, err = s.GetSubscriberCategories(ctx, 555)
+	require.NoError(t, err)
+	assert.Empty(t, cats)
+}
+
 func TestSubscriberCategories_ScopedPerChat(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
