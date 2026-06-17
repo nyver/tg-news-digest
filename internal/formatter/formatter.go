@@ -115,24 +115,20 @@ func digestBodyItem(item models.RankedNewsItem, rank int, mode ParseMode) string
 	switch mode {
 	case HTML:
 		title := stripHTML(item.Title)
-		summary := stripHTML(item.Summary)
+		summary := itemSummary(item)
 		sb.WriteString(fmt.Sprintf("<b>%s</b>\n", escapeHTML(title)))
-		if summary != "" {
-			sb.WriteString(escapeHTML(summary))
-		}
+		sb.WriteString(escapeHTML(summary))
 		if link := safeLink(item.Link); link != "" {
-			sb.WriteString(fmt.Sprintf(". <a href=\"%s\">Подробнее</a>", escapeHTML(link)))
+			sb.WriteString(htmlReadMore(link, summary))
 		}
 		if meta := buildMeta(item, mode); meta != "" {
 			sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
 		}
 	case MarkdownV2:
 		sb.WriteString(fmt.Sprintf("*%s*\n", escapeMD(stripHTML(item.Title))))
-		if item.Summary != "" {
-			sb.WriteString(escapeMD(item.Summary))
-		}
+		sb.WriteString(escapeMD(itemSummary(item)))
 		if link := safeLink(item.Link); link != "" {
-			sb.WriteString(fmt.Sprintf(". [Подробнее](%s)", link))
+			sb.WriteString(markdownReadMore(link, itemSummary(item)))
 		}
 		if meta := buildMeta(item, mode); meta != "" {
 			sb.WriteString(fmt.Sprintf("\n_%s_", meta))
@@ -173,24 +169,20 @@ func DigestBody(items []models.RankedNewsItem, mode ParseMode) string {
 		switch mode {
 		case HTML:
 			title := stripHTML(item.Title)
-			summary := stripHTML(item.Summary)
+			summary := itemSummary(item)
 			sb.WriteString(fmt.Sprintf("<b>%s</b>\n", escapeHTML(title)))
-			if summary != "" {
-				sb.WriteString(escapeHTML(summary))
-			}
+			sb.WriteString(escapeHTML(summary))
 			if link := safeLink(item.Link); link != "" {
-				sb.WriteString(fmt.Sprintf(". <a href=\"%s\">Подробнее</a>", escapeHTML(link)))
+				sb.WriteString(htmlReadMore(link, summary))
 			}
 			if meta := buildMeta(item, mode); meta != "" {
 				sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
 			}
 		case MarkdownV2:
 			sb.WriteString(fmt.Sprintf("*%s*\n", escapeMD(item.Title)))
-			if item.Summary != "" {
-				sb.WriteString(escapeMD(item.Summary))
-			}
+			sb.WriteString(escapeMD(itemSummary(item)))
 			if link := safeLink(item.Link); link != "" {
-				sb.WriteString(fmt.Sprintf(". [Подробнее](%s)", link))
+				sb.WriteString(markdownReadMore(link, itemSummary(item)))
 			}
 			if meta := buildMeta(item, mode); meta != "" {
 				sb.WriteString(fmt.Sprintf("\n_%s_", meta))
@@ -203,6 +195,33 @@ func DigestBody(items []models.RankedNewsItem, mode ParseMode) string {
 	}
 
 	return sb.String()
+}
+
+func itemSummary(item models.RankedNewsItem) string {
+	summary := stripHTML(item.Summary)
+	if summary == "" {
+		return "Краткое саммари недоступно."
+	}
+	return summary
+}
+
+func htmlReadMore(link, precedingText string) string {
+	return readMorePrefix(precedingText) + fmt.Sprintf("<a href=\"%s\">Подробнее</a>", escapeHTML(link))
+}
+
+func markdownReadMore(link, precedingText string) string {
+	return readMorePrefix(precedingText) + fmt.Sprintf("[Подробнее](%s)", link)
+}
+
+func readMorePrefix(precedingText string) string {
+	precedingText = strings.TrimSpace(precedingText)
+	if strings.HasSuffix(precedingText, ".") ||
+		strings.HasSuffix(precedingText, "!") ||
+		strings.HasSuffix(precedingText, "?") ||
+		strings.HasSuffix(precedingText, "…") {
+		return " "
+	}
+	return ". "
 }
 
 // buildMeta returns a "source • date" metadata string for an item, or "" if both are absent.

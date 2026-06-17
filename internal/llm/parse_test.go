@@ -39,6 +39,42 @@ func TestParseLLMResponse_Valid(t *testing.T) {
 	}
 }
 
+func TestParseLLMResponse_InlineSummary(t *testing.T) {
+	response := `1. Первая новость — Краткое описание первой новости. URL: https://example.com/1
+2. Вторая новость - Описание второй. URL: https://example.com/2`
+
+	ranked, err := parseLLMResponse(response, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("parseLLMResponse error: %v", err)
+	}
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(ranked))
+	}
+	if ranked[0].Title != "Первая новость" {
+		t.Errorf("expected split title, got %q", ranked[0].Title)
+	}
+	if ranked[0].Summary != "Краткое описание первой новости." {
+		t.Errorf("expected inline summary, got %q", ranked[0].Summary)
+	}
+	if ranked[0].Link != "https://example.com/1" {
+		t.Errorf("expected inline link, got %q", ranked[0].Link)
+	}
+}
+
+func TestParseLLMResponse_SummaryCappedAtTwoSentences(t *testing.T) {
+	response := `1. Первая новость
+   Первое предложение. Второе предложение. Третье предложение лишнее. URL: https://example.com/1`
+
+	ranked, err := parseLLMResponse(response, nil, 10, nil)
+	if err != nil {
+		t.Fatalf("parseLLMResponse error: %v", err)
+	}
+	want := "Первое предложение. Второе предложение."
+	if ranked[0].Summary != want {
+		t.Errorf("expected summary capped at two sentences, got %q", ranked[0].Summary)
+	}
+}
+
 func TestParseLLMResponse_LimitedTo10(t *testing.T) {
 	var response strings.Builder
 	for i := 1; i <= 15; i++ {

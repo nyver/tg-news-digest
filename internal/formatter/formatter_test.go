@@ -46,6 +46,17 @@ func TestDigestBody_SingleItem_HTML(t *testing.T) {
 	}
 }
 
+func TestDigestBody_SingleItemWithoutSummary_HTML(t *testing.T) {
+	items := []models.RankedNewsItem{
+		{Rank: 1, Title: "Тест", Link: "https://example.com"},
+	}
+	got := DigestBody(items, HTML)
+	want := "1. <b>Тест</b>\nКраткое саммари недоступно. <a href=\"https://example.com\">Подробнее</a>"
+	if got != want {
+		t.Errorf("DigestBody(HTML) = %q, want %q", got, want)
+	}
+}
+
 func TestDigestBody_SingleItem_MarkdownV2(t *testing.T) {
 	items := []models.RankedNewsItem{
 		{Rank: 1, Title: "Тест", Summary: "Описание", Link: "https://example.com"},

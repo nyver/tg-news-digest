@@ -108,7 +108,7 @@ func tryParseStructured(response string, topN int, categories []string) []models
 		if !inItem || currentTitle == "" {
 			return
 		}
-		summary := strings.TrimSpace(currentSummary.String())
+		summary := firstSentences(currentSummary.String(), 2, 240)
 		category := matchCategory(currentCategory, categories)
 		if category == "" {
 			category = classifyCategory(currentTitle, summary, categories)
@@ -139,12 +139,16 @@ func tryParseStructured(response string, topN int, categories []string) []models
 			if err != nil {
 				currentRank = len(ranked) + 1
 			}
-			currentTitle = strings.TrimSpace(match[2])
+			title, summary, inlineURL := splitInlineRankContent(match[2])
+			currentTitle = title
 			if len([]rune(currentTitle)) > 80 {
 				currentTitle = truncateRunes(currentTitle, 80) + "…"
 			}
 			currentSummary.Reset()
-			currentURL = ""
+			if summary != "" {
+				currentSummary.WriteString(summary)
+			}
+			currentURL = inlineURL
 			currentCategory = ""
 			continue
 		}
@@ -193,6 +197,28 @@ func tryParseStructured(response string, topN int, categories []string) []models
 	}
 
 	return ranked
+}
+
+func splitInlineRankContent(content string) (title, summary, link string) {
+	content = strings.TrimSpace(content)
+	if u := urlRe.FindString(content); u != "" {
+		link = strings.TrimRight(u, trailingPunct)
+		content = strings.TrimSpace(urlRe.ReplaceAllString(content, ""))
+		content = strings.TrimSuffix(strings.TrimSpace(content), "URL:")
+		content = strings.TrimSuffix(strings.TrimSpace(content), "Ссылка:")
+		content = strings.TrimSuffix(strings.TrimSpace(content), "Источник:")
+		content = strings.TrimSpace(content)
+	}
+
+	for _, sep := range []string{" — ", " – ", " - "} {
+		if before, after, ok := strings.Cut(content, sep); ok {
+			title = strings.TrimSpace(before)
+			summary = strings.TrimSpace(after)
+			return title, summary, link
+		}
+	}
+
+	return content, "", link
 }
 
 // stripCategoryPrefix returns the value after a "Категория:"/"Category:" label
