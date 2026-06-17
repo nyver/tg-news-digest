@@ -300,7 +300,7 @@ func TestBroadcast_CategoryFiltering_NoMatch_SkipsChat(t *testing.T) {
 	}
 
 	err = bot.Broadcast(ctx, items, time.Now())
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrBroadcastNoDeliveries)
 	mockAPI.AssertNotCalled(t, "Send", mock.Anything)
 }
 

@@ -129,7 +129,14 @@ func main() {
 			logger.Info("pipeline: no items to broadcast")
 			return nil
 		}
-		return b.Broadcast(ctx, ranked, time.Now())
+		if err := b.Broadcast(ctx, ranked, time.Now()); err != nil {
+			if errors.Is(err, bot.ErrBroadcastNoDeliveries) {
+				logger.Info("pipeline: broadcast skipped, no matching subscriber filters")
+				return nil
+			}
+			return err
+		}
+		return nil
 	}); err != nil {
 		logger.Error("failed to add digest job", slog.String("error", err.Error()))
 		os.Exit(1)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -22,6 +23,11 @@ import (
 
 // BroadcastFunc is called by the bot to run the full digest pipeline + broadcast.
 type BroadcastFunc func(ctx context.Context) error
+
+// ErrBroadcastNoDeliveries means a broadcast had active subscribers, but no
+// messages were sent, usually because every subscriber's category filter
+// matched zero items.
+var ErrBroadcastNoDeliveries = errors.New("bot: broadcast sent no messages")
 
 // TopicDigestFunc selects and summarizes news relevant to a free-text topic
 // requested via "/digest <тема>". The returned slice may legitimately be
@@ -304,6 +310,10 @@ func (b *Bot) cmdDigest(ctx context.Context, msg *tgbotapi.Message) {
 
 	err = b.broadcastFn(ctx)
 	if err != nil {
+		if errors.Is(err, ErrBroadcastNoDeliveries) {
+			b.reply(ctx, msg, "ℹ️ Дайджест собран, но не отправлен: нет новостей по выбранным категориям. Проверьте /categories или снимите фильтры.")
+			return
+		}
 		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка генерации: %v", err))
 		return
 	}
@@ -785,6 +795,8 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	failedCount := 0
+	sentCount := 0
+	skippedNoMatchCount := 0
 
 	for lang, chatIDs := range chatsByLang {
 		// Translate once per distinct language rather than per subscriber.
@@ -815,13 +827,22 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 				defer func() { <-sem }()
 
 				filtered := langItems
+				categoryCount := 0
 				if cats, err := b.store.GetSubscriberCategories(ctx, id); err != nil {
 					b.logger.Warn("bot: get subscriber categories failed",
 						slog.Int64("chat_id", id), slog.String("error", err.Error()))
 				} else if len(cats) > 0 {
+					categoryCount = len(cats)
 					filtered = filterTranslatedBySource(langItems, items, cats)
 				}
 				if len(filtered) == 0 {
+					mu.Lock()
+					skippedNoMatchCount++
+					mu.Unlock()
+					b.logger.Info("bot: broadcast skipped subscriber, no matching categories",
+						slog.Int64("chat_id", id),
+						slog.Int("categories", categoryCount),
+					)
 					return
 				}
 				parts := buildParts(filtered)
@@ -853,6 +874,9 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 						}
 						return
 					}
+					mu.Lock()
+					sentCount++
+					mu.Unlock()
 				}
 			}(chatID, langItems, buildParts)
 		}
@@ -860,12 +884,22 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 
 	wg.Wait()
 
+	b.logger.Info("bot: broadcast completed",
+		slog.Int("total", totalChats),
+		slog.Int("sent_messages", sentCount),
+		slog.Int("failed", failedCount),
+		slog.Int("skipped_no_match", skippedNoMatchCount),
+	)
+
 	if failedCount > 0 {
 		b.logger.Warn("bot: broadcast completed with failures",
 			slog.Int("total", totalChats),
 			slog.Int("failed", failedCount),
-			slog.Int("success", totalChats-failedCount),
+			slog.Int("success", totalChats-failedCount-skippedNoMatchCount),
 		)
+	}
+	if sentCount == 0 && failedCount == 0 && skippedNoMatchCount > 0 {
+		return ErrBroadcastNoDeliveries
 	}
 
 	return nil
