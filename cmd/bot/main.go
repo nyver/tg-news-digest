@@ -58,13 +58,17 @@ func main() {
 	rssFetcher := rss.New(cfg.RSS, store)
 
 	// Pipeline: fetch RSS → rank with LLM → save → return ranked items
-	runPipeline := buildPipeline(logger, store, rssFetcher, llmClient, cfg.App.DigestTopN)
+	scheduleLoc, err := time.LoadLocation(cfg.Schedule.Timezone)
+	if err != nil {
+		logger.Error("failed to load schedule timezone", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	runPipeline := buildPipeline(logger, store, rssFetcher, llmClient, cfg.App.DigestTopN, scheduleLoc)
 
 	// Initialize bot — use a pointer so the broadcastFn can reference it
 	var botRef *bot.Bot
 	botRef, err = bot.New(cfg.Bot, fmttr, store, func(ctx context.Context) error {
-		// /digest command uses the same window as the next scheduled cron:
-		// fetch news since the last cron run.
+		// /digest command always rebuilds today's digest, regardless of scheduled runs.
 		_, ranked, err := runPipeline(ctx, "command")
 		if err != nil {
 			return err
@@ -203,15 +207,20 @@ func buildPipeline(
 	rssFetcher *rss.Fetcher,
 	llmClient *llm.Client,
 	topN int,
+	scheduleLoc *time.Location,
 ) func(ctx context.Context, trigger string) (*models.DigestRun, []models.RankedNewsItem, error) {
 	return func(ctx context.Context, trigger string) (*models.DigestRun, []models.RankedNewsItem, error) {
 		logger.Info("pipeline: starting digest run", slog.String("trigger", trigger))
 
-		// 1. Compute fetch window: since the last successful run (any trigger),
-		// so that manual /digest commands advance the window just like cron.
-		since := time.Now().Add(-24 * time.Hour)
-		if lastRun, err := store.GetLastSuccessfulRun(ctx); err == nil && lastRun != nil {
-			since = *lastRun
+		// 1. Compute fetch window.
+		now := time.Now()
+		since := digestFetchSince(now, scheduleLoc, trigger, nil)
+		if trigger != "command" {
+			if lastRun, err := store.GetLastSuccessfulCronRun(ctx); err == nil && lastRun != nil {
+				since = digestFetchSince(now, scheduleLoc, trigger, lastRun)
+			} else if err != nil {
+				logger.Warn("pipeline: get last successful cron run failed", slog.String("error", err.Error()))
+			}
 		}
 		logger.Info("pipeline: fetch window", slog.Time("since", since))
 
@@ -289,6 +298,20 @@ func buildPipeline(
 
 		return run, ranked, nil
 	}
+}
+
+func digestFetchSince(now time.Time, loc *time.Location, trigger string, lastCronRun *time.Time) time.Time {
+	if loc == nil {
+		loc = time.Local
+	}
+	if trigger == "command" {
+		localNow := now.In(loc)
+		return time.Date(localNow.Year(), localNow.Month(), localNow.Day(), 0, 0, 0, 0, loc)
+	}
+	if lastCronRun != nil {
+		return *lastCronRun
+	}
+	return now.Add(-24 * time.Hour)
 }
 
 // multiHandler delegates logging to multiple underlying handlers.

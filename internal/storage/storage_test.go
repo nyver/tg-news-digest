@@ -143,12 +143,12 @@ func TestDigestRun(t *testing.T) {
 	assert.True(t, last.LLMUsed)
 }
 
-func TestGetLastSuccessfulRun(t *testing.T) {
+func TestGetLastSuccessfulCronRun(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 
 	// No runs yet
-	last, err := s.GetLastSuccessfulRun(ctx)
+	last, err := s.GetLastSuccessfulCronRun(ctx)
 	require.NoError(t, err)
 	assert.Nil(t, last)
 
@@ -156,26 +156,25 @@ func TestGetLastSuccessfulRun(t *testing.T) {
 	_, err = s.SaveDigestRun(ctx, models.DigestRun{RunAt: time.Now(), Status: "failed", Trigger: "cron"})
 	require.NoError(t, err)
 
-	last, err = s.GetLastSuccessfulRun(ctx)
+	last, err = s.GetLastSuccessfulCronRun(ctx)
 	require.NoError(t, err)
 	assert.Nil(t, last, "failed run should not be returned")
 
-	// A command run SHOULD count (advances the window to prevent duplicate broadcasts)
+	// A command run should not advance the scheduled digest window.
 	cmdTime := time.Now().Truncate(time.Second)
 	_, err = s.SaveDigestRun(ctx, models.DigestRun{RunAt: cmdTime, Status: "success", Trigger: "command"})
 	require.NoError(t, err)
 
-	last, err = s.GetLastSuccessfulRun(ctx)
+	last, err = s.GetLastSuccessfulCronRun(ctx)
 	require.NoError(t, err)
-	require.NotNil(t, last)
-	assert.WithinDuration(t, cmdTime, *last, time.Second)
+	assert.Nil(t, last, "command run should not be returned")
 
-	// A later cron run should supersede the command run
+	// A later cron run should be returned.
 	cronTime := cmdTime.Add(time.Hour)
 	_, err = s.SaveDigestRun(ctx, models.DigestRun{RunAt: cronTime, Status: "success", Trigger: "cron"})
 	require.NoError(t, err)
 
-	last, err = s.GetLastSuccessfulRun(ctx)
+	last, err = s.GetLastSuccessfulCronRun(ctx)
 	require.NoError(t, err)
 	require.NotNil(t, last)
 	assert.WithinDuration(t, cronTime, *last, time.Second)

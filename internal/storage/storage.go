@@ -454,15 +454,15 @@ func (s *Store) GetLastRun(ctx context.Context) (*models.DigestRun, error) {
 	return run, nil
 }
 
-// GetLastSuccessfulRun returns the run_at time of the last successful or fallback digest
-// (any trigger). This is used to advance the RSS fetch window so that both manual /digest
-// runs and scheduled cron runs are counted — preventing duplicate broadcasts.
-// Returns nil if no digest has ever run successfully.
-func (s *Store) GetLastSuccessfulRun(ctx context.Context) (*time.Time, error) {
+// GetLastSuccessfulCronRun returns the run_at time of the last successful or fallback
+// scheduled digest. Manual /digest runs are intentionally ignored so they don't
+// advance the next scheduled fetch window.
+// Returns nil if no scheduled digest has ever run successfully.
+func (s *Store) GetLastSuccessfulCronRun(ctx context.Context) (*time.Time, error) {
 	var t time.Time
 	err := s.db.QueryRowContext(ctx,
 		`SELECT run_at FROM digest_runs
-		 WHERE status != 'failed'
+		 WHERE status != 'failed' AND COALESCE(trigger, 'cron') = 'cron'
 		 ORDER BY id DESC LIMIT 1`,
 	).Scan(&t)
 	if err == sql.ErrNoRows {
