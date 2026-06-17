@@ -38,7 +38,10 @@ func (c *Client) TranslateDigest(ctx context.Context, items []models.RankedNewsI
 	if len(items) == 0 || isDefaultLanguage(targetLang) {
 		return items, header, nil
 	}
+	return c.translateDigest(ctx, items, header, targetLang)
+}
 
+func (c *Client) translateDigest(ctx context.Context, items []models.RankedNewsItem, header, targetLang string) ([]models.RankedNewsItem, string, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		if c.cfg.Timeout > 0 {
@@ -99,10 +102,46 @@ func (c *Client) TranslateDigest(ctx context.Context, items []models.RankedNewsI
 	return result, translatedHeader, nil
 }
 
+// EnsureRussianDigest translates a ranked digest back to Russian if the model
+// or fallback paths left clearly English title/summary text in the output.
+func (c *Client) EnsureRussianDigest(ctx context.Context, items []models.RankedNewsItem, header string) ([]models.RankedNewsItem, error) {
+	if !digestNeedsRussianTranslation(items) {
+		return items, nil
+	}
+
+	translated, _, err := c.translateDigest(ctx, items, header, "Russian")
+	if err != nil {
+		return items, err
+	}
+	return translated, nil
+}
+
+func digestNeedsRussianTranslation(items []models.RankedNewsItem) bool {
+	for _, item := range items {
+		if textLooksEnglish(item.Title) || textLooksEnglish(item.Summary) {
+			return true
+		}
+	}
+	return false
+}
+
+func textLooksEnglish(text string) bool {
+	var latin, cyrillic int
+	for _, r := range text {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+			latin++
+		case r >= 'А' && r <= 'я', r == 'Ё', r == 'ё':
+			cyrillic++
+		}
+	}
+	return latin >= 20 && latin > cyrillic*2
+}
+
 // buildTranslateSystemPrompt instructs the LLM to act as a faithful translator
 // rather than re-ranking or re-summarizing the digest.
 func buildTranslateSystemPrompt(targetLang string) string {
-	return fmt.Sprintf(`You are a precise translator. Translate the given Russian news digest into %s.
+	return fmt.Sprintf(`You are a precise translator. Translate the given news digest into %s.
 Preserve the meaning exactly — do not summarize further, do not add or remove information, do not add your own comments.
 Keep exactly the same number of items, in the same order, numbered the same way as the input.
 

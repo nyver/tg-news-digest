@@ -136,6 +136,12 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem, topN 
 		}
 	}
 
+	if translated, err := c.EnsureRussianDigest(ctx, ranked, "Топ новостей"); err != nil {
+		c.logger.Warn("llm: Russian translation cleanup failed, keeping original text", slog.String("error", err.Error()))
+	} else {
+		ranked = translated
+	}
+
 	c.logger.Info("llm: parsed ranked items", slog.Int("count", len(ranked)))
 
 	return ranked, true, nil

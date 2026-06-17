@@ -77,7 +77,14 @@ func (c *Client) RankByTopic(ctx context.Context, items []models.NewsItem, topic
 		return fallbackByTopic(sorted, topic, maxN), false, nil
 	}
 
-	return enrichRankedItems(ranked, forLLM), true, nil
+	ranked = enrichRankedItems(ranked, forLLM)
+	if translated, err := c.EnsureRussianDigest(ctx, ranked, "Новости по теме"); err != nil {
+		c.logger.Warn("llm: topic Russian translation cleanup failed, keeping original text", slog.String("error", err.Error()))
+	} else {
+		ranked = translated
+	}
+
+	return ranked, true, nil
 }
 
 // buildTopicSystemPrompt instructs the LLM to act as a relevance filter for a

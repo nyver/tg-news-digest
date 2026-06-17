@@ -131,6 +131,120 @@ func TestRankWithLLM_ToppedUpWhenLLMUnderDelivers(t *testing.T) {
 	}
 }
 
+func TestRankWithLLM_TranslatesEnglishResponseToRussian(t *testing.T) {
+	call := 0
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		call++
+		w.Header().Set("Content-Type", "application/json")
+
+		content := `1. OpenAI releases a new reasoning model
+   The company says the model improves coding and analysis tasks. URL: https://example.com/1`
+		if call == 2 {
+			content = `ЗАГОЛОВОК: Топ новостей
+1. OpenAI выпустила новую reasoning-модель
+   Компания заявляет, что модель лучше справляется с задачами программирования и анализа.`
+		}
+
+		resp := llamaChatResponse{
+			Choices: []llamaChoice{{Message: llamaMsg{Content: content}}},
+		}
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
+		Endpoint:      server.URL + "/v1/chat/completions",
+		Model:         "test-model",
+		Temperature:   0.3,
+		MaxTokens:     2000,
+		ContextWindow: 8192,
+		Timeout:       5 * time.Second,
+	}
+	client := New(cfg, slog.Default())
+
+	items := []models.NewsItem{
+		{ID: "1", Title: "OpenAI releases a new reasoning model", Description: "The company says the model improves coding and analysis tasks.", Link: "https://example.com/1", PublishedAt: time.Now()},
+	}
+
+	ranked, llmUsed, err := client.RankWithLLM(context.Background(), items, 1)
+	if err != nil {
+		t.Fatalf("RankWithLLM error: %v", err)
+	}
+	if !llmUsed {
+		t.Error("expected llmUsed=true")
+	}
+	if call != 2 {
+		t.Fatalf("expected ranking call plus Russian cleanup call, got %d calls", call)
+	}
+	if ranked[0].Title != "OpenAI выпустила новую reasoning-модель" {
+		t.Errorf("expected translated title, got %q", ranked[0].Title)
+	}
+	if ranked[0].Summary != "Компания заявляет, что модель лучше справляется с задачами программирования и анализа." {
+		t.Errorf("expected translated summary, got %q", ranked[0].Summary)
+	}
+}
+
+func TestRankWithLLM_TranslatesEnglishTopUpItemsToRussian(t *testing.T) {
+	call := 0
+	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		call++
+		w.Header().Set("Content-Type", "application/json")
+
+		content := `1. Первая новость
+   Русское описание. URL: https://example.com/1`
+		if call == 2 {
+			content = `ЗАГОЛОВОК: Топ новостей
+1. Первая новость
+   Русское описание.
+2. Вторую новость перевели
+   Это описание тоже перевели на русский.`
+		}
+
+		resp := llamaChatResponse{
+			Choices: []llamaChoice{{Message: llamaMsg{Content: content}}},
+		}
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	cfg := config.LLMConfig{
+		Provider:      "llama-cpp",
+		Endpoint:      server.URL + "/v1/chat/completions",
+		Model:         "test-model",
+		Temperature:   0.3,
+		MaxTokens:     2000,
+		ContextWindow: 8192,
+		Timeout:       5 * time.Second,
+	}
+	client := New(cfg, slog.Default())
+
+	items := []models.NewsItem{
+		{ID: "1", Title: "First", Description: "First desc", Link: "https://example.com/1", PublishedAt: time.Now()},
+		{ID: "2", Title: "Second story remains in English", Description: "This description is still in English and should be translated.", Link: "https://example.com/2", PublishedAt: time.Now().Add(-1 * time.Hour)},
+	}
+
+	ranked, llmUsed, err := client.RankWithLLM(context.Background(), items, 2)
+	if err != nil {
+		t.Fatalf("RankWithLLM error: %v", err)
+	}
+	if !llmUsed {
+		t.Error("expected llmUsed=true")
+	}
+	if call != 2 {
+		t.Fatalf("expected ranking call plus Russian cleanup call, got %d calls", call)
+	}
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 ranked items, got %d", len(ranked))
+	}
+	if ranked[1].Title != "Вторую новость перевели" {
+		t.Errorf("expected translated top-up title, got %q", ranked[1].Title)
+	}
+	if ranked[1].Summary != "Это описание тоже перевели на русский." {
+		t.Errorf("expected translated top-up summary, got %q", ranked[1].Summary)
+	}
+}
+
 func TestRankWithLLM_NoTopUpWhenNotEnoughItems(t *testing.T) {
 	server := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
