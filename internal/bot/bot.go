@@ -2,6 +2,8 @@ package bot
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -494,10 +496,24 @@ func (b *Bot) buildCategoriesKeyboard(selected []string) tgbotapi.InlineKeyboard
 			label = "✅ " + cat
 		}
 		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData(label, "cat:"+cat),
+			tgbotapi.NewInlineKeyboardButtonData(label, "cat:"+categoryCallbackID(cat)),
 		))
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
+}
+
+func categoryCallbackID(category string) string {
+	sum := sha1.Sum([]byte(strings.ToLower(strings.TrimSpace(category))))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func (b *Bot) categoryFromCallbackID(id string) (string, bool) {
+	for _, cat := range b.categories {
+		if categoryCallbackID(cat) == id {
+			return cat, true
+		}
+	}
+	return "", false
 }
 
 func customCategories(selected, configured []string) []string {
@@ -538,9 +554,13 @@ func (b *Bot) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	category, ok := strings.CutPrefix(cq.Data, "cat:")
+	categoryID, ok := strings.CutPrefix(cq.Data, "cat:")
 	if !ok {
 		return
+	}
+	category, ok := b.categoryFromCallbackID(categoryID)
+	if !ok {
+		category = categoryID
 	}
 
 	chatID := cq.Message.Chat.ID

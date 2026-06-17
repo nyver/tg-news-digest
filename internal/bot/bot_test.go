@@ -371,6 +371,53 @@ func TestHandleCallback_TogglesCategory(t *testing.T) {
 	assert.Empty(t, cats)
 }
 
+func TestBuildCategoriesKeyboard_UsesShortCallbackData(t *testing.T) {
+	cfg := config.BotConfig{Categories: []string{
+		"Very long news category about machine learning infrastructure automation",
+	}}
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(new(mockTGAPI), cfg, fmttr, newTestStore(t), nil, slog.Default())
+	require.NoError(t, err)
+
+	keyboard := bot.buildCategoriesKeyboard(nil)
+	require.Len(t, keyboard.InlineKeyboard, 1)
+	require.Len(t, keyboard.InlineKeyboard[0], 1)
+	require.NotNil(t, keyboard.InlineKeyboard[0][0].CallbackData)
+
+	callbackData := *keyboard.InlineKeyboard[0][0].CallbackData
+	assert.LessOrEqual(t, len([]byte(callbackData)), 64)
+	assert.Equal(t, "cat:"+categoryCallbackID(cfg.Categories[0]), callbackData)
+}
+
+func TestHandleCallback_TogglesHashedCategory(t *testing.T) {
+	ctx := context.Background()
+	mockAPI := new(mockTGAPI)
+	store := newTestStore(t)
+
+	category := "Very long news category about machine learning infrastructure"
+	cfg := config.BotConfig{Categories: []string{category}}
+	fmttr := formatter.New(formatter.HTML, 10)
+	bot, err := NewWithAPI(mockAPI, cfg, fmttr, store, nil, slog.Default())
+	require.NoError(t, err)
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	cq := &tgbotapi.CallbackQuery{
+		ID:   "cbid",
+		Data: "cat:" + categoryCallbackID(category),
+		Message: &tgbotapi.Message{
+			MessageID: 1,
+			Chat:      &tgbotapi.Chat{ID: 42},
+		},
+	}
+
+	bot.handleCallback(ctx, cq)
+
+	cats, err := store.GetSubscriberCategories(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, []string{category}, cats)
+}
+
 func TestCmdAddAndRemoveCategory(t *testing.T) {
 	ctx := context.Background()
 	bot := newTestBot(t, nil)
