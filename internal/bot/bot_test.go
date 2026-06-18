@@ -108,6 +108,9 @@ func TestCmdStart_SendsHelpWithCommandList(t *testing.T) {
 	assert.Contains(t, gotText, "/categories")
 	assert.Contains(t, gotText, "/digest")
 	assert.Contains(t, gotText, "/language")
+	assert.Contains(t, gotText, "/mode")
+	assert.Contains(t, gotText, "/settings")
+	assert.Contains(t, gotText, "/status")
 
 	active, err := bot.store.IsActive(ctx, 42)
 	require.NoError(t, err)

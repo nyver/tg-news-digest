@@ -413,6 +413,16 @@ func StatusMessage(runStatus, dateStr string, itemCount int, mode ParseMode) str
 
 // StartMessage returns the /start greeting.
 func StartMessage(mode ParseMode) string {
+	msg := startMessageBase(mode)
+	switch mode {
+	case HTML:
+		return msg + "\nОтправь <code>/mode brief</code> чтобы выбрать режим дайджеста: brief, detailed, executive, links или why_it_matters.\nОтправь <code>/settings</code> чтобы настроить время, timezone, количество новостей, режим, язык и темы.\nОтправь <code>/status</code> чтобы посмотреть статус последнего запуска."
+	default:
+		return msg + "\nОтправь /mode brief чтобы выбрать режим дайджеста: brief, detailed, executive, links или why_it_matters.\nОтправь /settings чтобы настроить время, timezone, количество новостей, режим, язык и темы.\nОтправь /status чтобы посмотреть статус последнего запуска."
+	}
+}
+
+func startMessageBase(mode ParseMode) string {
 	switch mode {
 	case HTML:
 		return `<b>Привет! Я бот дайджеста новостей.</b>
