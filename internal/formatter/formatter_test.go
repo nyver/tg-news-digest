@@ -149,6 +149,27 @@ func TestEscapeMD(t *testing.T) {
 	}
 }
 
+func TestSafeLink(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "https", input: "https://example.com/a?b=c", want: "https://example.com/a?b=c"},
+		{name: "trim", input: " https://example.com/a ", want: "https://example.com/a"},
+		{name: "javascript", input: "javascript:alert(1)", want: ""},
+		{name: "relative", input: "/news/1", want: ""},
+		{name: "control", input: "https://example.com/\nnext", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := safeLink(tc.input); got != tc.want {
+				t.Fatalf("safeLink(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDigest_Full(t *testing.T) {
 	date := time.Date(2026, 5, 25, 0, 0, 0, 0, time.UTC)
 	items := []models.RankedNewsItem{

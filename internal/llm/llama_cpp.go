@@ -40,11 +40,11 @@ func NewLlamaCPP(cfg config.LLMConfig, logger *slog.Logger) Provider {
 }
 
 type llamaChatRequest struct {
-	Model       string       `json:"model"`
-	Messages    []llamaMsg   `json:"messages"`
-	Temperature float64      `json:"temperature"`
-	MaxTokens   int          `json:"max_tokens"`
-	Stream      bool         `json:"stream"`
+	Model       string     `json:"model"`
+	Messages    []llamaMsg `json:"messages"`
+	Temperature float64    `json:"temperature"`
+	MaxTokens   int        `json:"max_tokens"`
+	Stream      bool       `json:"stream"`
 }
 
 type llamaMsg struct {
@@ -83,7 +83,8 @@ func (p *LlamaCPP) Chat(ctx context.Context, req *ChatRequest) (string, error) {
 	}
 
 	if resp.StatusCode() != 200 {
-		return "", fmt.Errorf("llm: unexpected HTTP %d: %s", resp.StatusCode(), strings.TrimSpace(resp.String()))
+		return "", fmt.Errorf("llm: unexpected HTTP %d: %s",
+			resp.StatusCode(), truncateForLog(strings.TrimSpace(resp.String()), 200))
 	}
 
 	var apiResp llamaChatResponse

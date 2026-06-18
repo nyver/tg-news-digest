@@ -195,6 +195,9 @@ func NormalizeDigestMode(mode string) string {
 }
 
 func (s *Store) upsertSubscriberPreference(ctx context.Context, chatID int64, column string, value any) error {
+	if !allowedSubscriberPreferenceColumn(column) {
+		return fmt.Errorf("storage: unsupported subscriber preference column %q", column)
+	}
 	_, err := s.db.ExecContext(ctx,
 		fmt.Sprintf(`INSERT INTO subscribers (chat_id, created_at, active, %s)
 		 VALUES (?, CURRENT_TIMESTAMP, 0, ?)
@@ -202,6 +205,21 @@ func (s *Store) upsertSubscriberPreference(ctx context.Context, chatID int64, co
 		chatID, value,
 	)
 	return err
+}
+
+func allowedSubscriberPreferenceColumn(column string) bool {
+	switch column {
+	case "timezone",
+		"delivery_time",
+		"digest_top_n",
+		"digest_format",
+		"quiet_weekends",
+		"last_digest_sent_date",
+		"language":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetSubscriberSettings returns the chat's digest preferences, defaulting in

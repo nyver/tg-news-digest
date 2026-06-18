@@ -76,6 +76,13 @@ func TestWithPort(t *testing.T) {
 	assert.Equal(t, 9999, result.port)
 }
 
+func TestWithHost(t *testing.T) {
+	checker := &Checker{host: "127.0.0.1"}
+	result := checker.WithHost("0.0.0.0")
+	assert.Equal(t, "0.0.0.0", checker.host)
+	assert.Equal(t, "0.0.0.0", result.host)
+}
+
 func TestHandler_MethodNotAllowed(t *testing.T) {
 	checker, _ := newTestChecker(t, 0)
 
@@ -294,6 +301,7 @@ func TestDashboardJSONHandler(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/dashboard.json", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	checker.DashboardJSONHandler().ServeHTTP(w, req)
 
@@ -314,6 +322,7 @@ func TestDashboardHandler_HTML(t *testing.T) {
 	checker, _ := newTestChecker(t, 0)
 
 	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	checker.DashboardHandler().ServeHTTP(w, req)
 
@@ -321,6 +330,28 @@ func TestDashboardHandler_HTML(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
 	assert.Contains(t, w.Body.String(), "TG News Digest Dashboard")
 	assert.Contains(t, w.Body.String(), "https://example.com/feed.xml")
+}
+
+func TestDashboardRequiresTokenForNonLoopback(t *testing.T) {
+	checker, _ := newTestChecker(t, 0)
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard.json", nil)
+	req.RemoteAddr = "203.0.113.10:1234"
+	w := httptest.NewRecorder()
+	checker.DashboardJSONHandler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestDashboardAllowsBearerToken(t *testing.T) {
+	checker, _ := newTestChecker(t, 0)
+	checker.token = "secret"
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard.json", nil)
+	req.RemoteAddr = "203.0.113.10:1234"
+	req.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+	checker.DashboardJSONHandler().ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestDashboard_MethodNotAllowed(t *testing.T) {

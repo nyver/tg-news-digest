@@ -204,7 +204,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 			}
 			return 0
 		}()),
-		slog.String("text", msg.Text),
+		slog.Int("text_len", len([]rune(msg.Text))),
 		slog.String("chat_type", msg.Chat.Type),
 	)
 

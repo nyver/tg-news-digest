@@ -117,7 +117,7 @@ func (c *Client) RankWithLLM(ctx context.Context, items []models.NewsItem, topN 
 		return createFallback(sorted, topN, categories), false, nil
 	}
 
-	c.logger.Debug("llm: raw response", slog.String("response", content))
+	c.logger.Debug("llm: response received", slog.Int("response_len", len([]rune(content))))
 
 	ranked, err := parseLLMResponse(content, forLLM, topN, categories)
 	if err != nil {

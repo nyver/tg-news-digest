@@ -45,7 +45,7 @@ llm:
 #   timeout: 60s
 
 schedule:
-  cron: "0 9 * * *"             # Ежедневно в 09:00
+  cron: "* * * * *"             # How often to check subscribers whose delivery_time is due
   timezone: "Europe/Moscow"
 
 # Категории для классификации новостей (LLM + keyword-фоллбэк).
@@ -76,6 +76,8 @@ app:
   retry_max: 3
   retry_backoff: 2s
   digest_log_path: "./data/bot.log"
+  health_host: "127.0.0.1"      # HTTP bind host; use "0.0.0.0" in Docker
+  dashboard_token: ""           # Bearer token for /dashboard; empty allows localhost only
   health_port: 9100             # Порт HTTP-эндпоинта healthcheck
   digest_top_n: 10              # Количество новостей в ежедневном дайджесте
   fetched_items_retention_days: 3  # Хранить fetched_items не дольше N дней (housekeeping)

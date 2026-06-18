@@ -113,7 +113,7 @@ docker run -d \
 docker run -d \
   --name tg-news-digest \
   -p 9100:9100 \
-  -v ./configs/config.yaml:/app/config.example.yaml:ro \
+  -v ./configs/config.yaml:/app/config.yaml:ro \
   tg-news-digest
 ```
 
@@ -154,7 +154,7 @@ docker compose down -v
 
 ### Переопределение конфигурации
 
-По умолчанию используется `configs/config.yaml`, смонтированный как `config.example.yaml` внутри контейнера.
+По умолчанию используется `configs/config.yaml`, смонтированный как `/app/config.yaml` внутри контейнера.
 Чтобы использовать другой файл:
 
 ```yaml
@@ -162,7 +162,7 @@ docker compose down -v
 services:
   tg-news-digest:
     volumes:
-      - ./configs/production.yaml:/app/config.example.yaml:ro
+      - ./configs/production.yaml:/app/config.yaml:ro
 ```
 
 И запустить:
@@ -205,7 +205,7 @@ llm:
   timeout: 60s
 
 schedule:
-  cron: "0 9 * * *"               # Ежедневно в 09:00
+  cron: "* * * * *"               # Как часто проверять подписчиков, у которых наступило delivery_time
   timezone: "Europe/Moscow"
 
 # Категории для классификации новостей (LLM + keyword-фоллбэк).
@@ -236,7 +236,9 @@ app:
   retry_max: 3
   retry_backoff: 2s
   digest_log_path: "./data/bot.log"
+  health_host: "127.0.0.1"          # HTTP bind host; для Docker используйте 0.0.0.0
   health_port: 9100                  # Порт HTTP-эндпоинта healthcheck
+  dashboard_token: ""                # Bearer token для /dashboard; без токена dashboard доступен только с localhost
   digest_top_n: 10                   # Количество новостей в ежедневном дайджесте
   fetched_items_retention_days: 3    # Хранить fetched_items не дольше N дней (housekeeping)
 ```
@@ -275,11 +277,12 @@ export TG_NEWS_LLM_ENDPOINT="http://localhost:8080"
 curl http://localhost:9100/health
 ```
 
-Read-only dashboard:
+Read-only dashboard доступен с localhost. Если `app.dashboard_token` задан, передайте его как Bearer token:
 
 ```bash
 open http://localhost:9100/dashboard
 curl http://localhost:9100/dashboard.json
+curl -H "Authorization: Bearer $TG_NEWS_APP_DASHBOARD_TOKEN" http://localhost:9100/dashboard.json
 ```
 
 Dashboard показывает источники RSS, последние ошибки RSS, последние дайджесты, количество подписчиков, статистику отправленных/упавших сообщений и популярные категории.
@@ -388,7 +391,7 @@ A: Два провайдера через единый интерфейс:
 A: Бот автоматически переключится на fallback — топ-10 по дате публикации без AI-ранжирования.
 
 **Q: Как часто выходит дайджест?**
-A: По расписанию cron — по умолчанию `0 9 * * *` (ежедневно в 09:00 по Moscow Time). Можно изменить в конфиге или через `/digest` (owner).
+A: Планировщик по умолчанию каждую минуту (`* * * * *`) проверяет подписчиков, у которых наступило их `delivery_time`. Время доставки меняется через `/settings`; `/digest` у owner запускает рассылку вручную.
 
 **Q: Как бэкапить базу данных?**
 A: SQLite в WAL-режиме. Используйте `sqlite3 .dump` или просто копию файла `data/bot.db`.

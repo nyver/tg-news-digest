@@ -76,7 +76,7 @@ func (c *Client) translateDigest(ctx context.Context, items []models.RankedNewsI
 		return items, header, err
 	}
 
-	c.logger.Debug("llm: translate raw response", slog.String("response", content))
+	c.logger.Debug("llm: translate response received", slog.Int("response_len", len([]rune(content))))
 
 	translatedHeader, translatedItems, ok := parseTranslatedDigest(content, len(items))
 	if !ok {

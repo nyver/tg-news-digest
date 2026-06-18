@@ -89,7 +89,8 @@ func (p *OpenRouter) Chat(ctx context.Context, req *ChatRequest) (string, error)
 	}
 
 	if resp.StatusCode() != 200 {
-		return "", fmt.Errorf("llm: openrouter unexpected HTTP %d: %s", resp.StatusCode(), strings.TrimSpace(resp.String()))
+		return "", fmt.Errorf("llm: openrouter unexpected HTTP %d: %s",
+			resp.StatusCode(), truncateForLog(strings.TrimSpace(resp.String()), 200))
 	}
 
 	var apiResp orChatResponse

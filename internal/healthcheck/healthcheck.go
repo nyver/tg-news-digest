@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"html/template"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -44,11 +47,17 @@ type Checker struct {
 	botCfg  config.BotConfig
 	logger  *slog.Logger
 	started time.Time
+	host    string
 	port    int
+	token   string
 }
 
 // New creates a health checker with the given configuration.
 func New(cfg config.Config, store *storage.Store, logger *slog.Logger) *Checker {
+	host := cfg.App.HealthHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
 	return &Checker{
 		store:   store,
 		rssCfg:  cfg.RSS,
@@ -56,7 +65,9 @@ func New(cfg config.Config, store *storage.Store, logger *slog.Logger) *Checker 
 		botCfg:  cfg.Bot,
 		logger:  logger,
 		started: time.Now(),
+		host:    host,
 		port:    9100, // default health check port
+		token:   cfg.App.DashboardToken,
 	}
 }
 
@@ -79,6 +90,12 @@ type DashboardData struct {
 // WithPort sets a custom port for the health endpoint.
 func (hc *Checker) WithPort(port int) *Checker {
 	hc.port = port
+	return hc
+}
+
+// WithHost sets the bind host for the health endpoint.
+func (hc *Checker) WithHost(host string) *Checker {
+	hc.host = host
 	return hc
 }
 
@@ -116,6 +133,10 @@ func (hc *Checker) DashboardJSONHandler() http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !hc.dashboardAllowed(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
@@ -138,6 +159,10 @@ func (hc *Checker) DashboardHandler() http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !hc.dashboardAllowed(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
@@ -151,6 +176,30 @@ func (hc *Checker) DashboardHandler() http.HandlerFunc {
 			hc.logger.Error("dashboard: render response", slog.String("error", err.Error()))
 		}
 	}
+}
+
+func (hc *Checker) dashboardAllowed(r *http.Request) bool {
+	if hc.token != "" {
+		return bearerToken(r.Header.Get("Authorization")) == hc.token
+	}
+	return isLoopbackRemote(r.RemoteAddr)
+}
+
+func bearerToken(header string) string {
+	scheme, token, ok := strings.Cut(strings.TrimSpace(header), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(token)
+}
+
+func isLoopbackRemote(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (hc *Checker) Dashboard(ctx context.Context) (DashboardData, error) {
@@ -390,7 +439,7 @@ func (hc *Checker) StartHTTPServer(ctx context.Context) (*http.Server, func()) {
 	mux.HandleFunc("/dashboard.json", hc.DashboardJSONHandler())
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", hc.port),
+		Addr:         net.JoinHostPort(hc.host, strconv.Itoa(hc.port)),
 		Handler:      mux,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,

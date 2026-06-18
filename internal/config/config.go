@@ -64,7 +64,9 @@ type AppConfig struct {
 	RetryMax                  int           `mapstructure:"retry_max"`
 	RetryBackoff              time.Duration `mapstructure:"retry_backoff"`
 	DigestLogPath             string        `mapstructure:"digest_log_path"`
+	HealthHost                string        `mapstructure:"health_host"`
 	HealthPort                int           `mapstructure:"health_port"`
+	DashboardToken            string        `mapstructure:"dashboard_token"`
 	DigestTopN                int           `mapstructure:"digest_top_n"`
 	FetchedItemsRetentionDays int           `mapstructure:"fetched_items_retention_days"`
 }
@@ -164,6 +166,9 @@ func Validate(cfg *Config) error {
 	if cfg.App.RetryBackoff <= 0 {
 		cfg.App.RetryBackoff = 2 * time.Second
 	}
+	if cfg.App.HealthHost == "" {
+		cfg.App.HealthHost = "127.0.0.1"
+	}
 	if cfg.App.HealthPort <= 0 {
 		cfg.App.HealthPort = 9100
 	}
@@ -174,7 +179,7 @@ func Validate(cfg *Config) error {
 		cfg.App.FetchedItemsRetentionDays = 3
 	}
 	if cfg.Schedule.Cron == "" {
-		cfg.Schedule.Cron = "0 9 * * *"
+		cfg.Schedule.Cron = "* * * * *"
 	}
 	if cfg.Schedule.Timezone == "" {
 		cfg.Schedule.Timezone = "Europe/Moscow"
@@ -267,8 +272,10 @@ func splitCron(s string) []string {
 }
 
 // MustLoad panics if config cannot be loaded. Used in cmd/bot/main.go.
-func MustLoad() *Config {
-	path := os.Getenv("TG_NEWS_CONFIG")
+func MustLoad(path string) *Config {
+	if path == "" {
+		path = os.Getenv("TG_NEWS_CONFIG")
+	}
 	cfg, err := Load(path)
 	if err != nil {
 		panic(fmt.Sprintf("config: failed to load: %v", err))

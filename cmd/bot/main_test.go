@@ -79,6 +79,26 @@ func TestParseLogLevel(t *testing.T) {
 	}
 }
 
+func TestConfigPathFromArgs(t *testing.T) {
+	got, err := configPathFromArgs([]string{"--config", "configs/config.yaml"})
+	if err != nil {
+		t.Fatalf("configPathFromArgs error: %v", err)
+	}
+	if got != "configs/config.yaml" {
+		t.Fatalf("configPathFromArgs = %q, want configs/config.yaml", got)
+	}
+}
+
+func TestConfigPathFromArgs_DefaultEmpty(t *testing.T) {
+	got, err := configPathFromArgs(nil)
+	if err != nil {
+		t.Fatalf("configPathFromArgs error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("configPathFromArgs = %q, want empty", got)
+	}
+}
+
 func TestSetupLogger_WithFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bot.log")
 	logger, file := setupLogger(config.AppConfig{DigestLogPath: path, LogLevel: "debug"})

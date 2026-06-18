@@ -546,3 +546,10 @@ func TestGetDueSubscriberSettings_QuietWeekends(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, due)
 }
+
+func TestUpsertSubscriberPreferenceRejectsUnknownColumn(t *testing.T) {
+	store := newTestStore(t)
+	err := store.upsertSubscriberPreference(context.Background(), 1, "language = 'x', active", "y")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported subscriber preference column")
+}

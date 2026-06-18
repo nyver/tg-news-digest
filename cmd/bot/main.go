@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -22,7 +23,13 @@ import (
 )
 
 func main() {
-	cfg := config.MustLoad()
+	configPath, err := configPathFromArgs(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid arguments: %v\n", err)
+		os.Exit(2)
+	}
+
+	cfg := config.MustLoad(configPath)
 
 	logger, logFile := setupLogger(cfg.App)
 	if logFile != nil {
@@ -107,10 +114,15 @@ func main() {
 	})
 
 	// Initialize healthcheck
-	hc := healthcheck.New(*cfg, store, logger).WithPort(cfg.App.HealthPort)
+	hc := healthcheck.New(*cfg, store, logger).
+		WithHost(cfg.App.HealthHost).
+		WithPort(cfg.App.HealthPort)
 	_, healthShutdown := hc.StartHTTPServer(ctx)
 	defer healthShutdown()
-	logger.Info("healthcheck: enabled", slog.Int("port", cfg.App.HealthPort))
+	logger.Info("healthcheck: enabled",
+		slog.String("host", cfg.App.HealthHost),
+		slog.Int("port", cfg.App.HealthPort),
+	)
 
 	// Initialize scheduler
 	sched, err := scheduler.New(cfg.Schedule, logger)
@@ -121,7 +133,7 @@ func main() {
 
 	// Personal schedules are checked every minute. Subscribers without custom
 	// settings keep the old default: 09:00 Europe/Moscow.
-	if err := sched.AddJob("* * * * *", func(ctx context.Context) error {
+	if err := sched.AddJob(cfg.Schedule.Cron, func(ctx context.Context) error {
 		now := time.Now().UTC()
 		due, err := store.GetDueSubscriberSettings(ctx, now)
 		if err != nil {
@@ -226,6 +238,16 @@ func main() {
 	// Grace period for cleanup operations and goroutine shutdown
 	time.Sleep(2 * time.Second)
 	logger.Info("bot: stopped")
+}
+
+func configPathFromArgs(args []string) (string, error) {
+	fs := flag.NewFlagSet("tg-news-digest", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := fs.String("config", "", "path to YAML config file")
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	return *configPath, nil
 }
 
 func maxDigestTopN(configured int) int {

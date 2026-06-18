@@ -80,10 +80,11 @@ rss:
 	assert.Equal(t, 4000, cfg.LLM.MaxTokens)
 	assert.Equal(t, 0.3, cfg.LLM.Temperature)
 	assert.Equal(t, 60*time.Second, cfg.LLM.Timeout)
-	assert.Equal(t, "0 9 * * *", cfg.Schedule.Cron)
+	assert.Equal(t, "* * * * *", cfg.Schedule.Cron)
 	assert.Equal(t, "Europe/Moscow", cfg.Schedule.Timezone)
 	assert.Equal(t, 3, cfg.App.RetryMax)
 	assert.Equal(t, 2*time.Second, cfg.App.RetryBackoff)
+	assert.Equal(t, "127.0.0.1", cfg.App.HealthHost)
 	assert.Equal(t, 3, cfg.App.FetchedItemsRetentionDays)
 }
 

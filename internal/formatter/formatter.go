@@ -3,6 +3,7 @@ package formatter
 import (
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -274,10 +275,23 @@ func whyItMatters(item models.RankedNewsItem) string {
 
 // safeLink returns link only if it uses http/https scheme; otherwise returns "".
 func safeLink(link string) string {
-	if strings.HasPrefix(link, "https://") || strings.HasPrefix(link, "http://") {
-		return link
+	link = strings.TrimSpace(link)
+	u, err := url.ParseRequestURI(link)
+	if err != nil {
+		return ""
 	}
-	return ""
+	if u.Scheme != "https" && u.Scheme != "http" {
+		return ""
+	}
+	if u.Host == "" {
+		return ""
+	}
+	for _, r := range link {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return link
 }
 
 // DigestHeader returns the date header for the digest.

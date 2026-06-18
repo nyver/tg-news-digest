@@ -13,6 +13,7 @@ $(APP_NAME)
 # Coverage
 coverage.out
 coverage.html
+.gocache/
 
 # Build artifacts
 dist/

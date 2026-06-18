@@ -20,10 +20,12 @@ RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 
 COPY --from=builder /bot /app/bot
-COPY configs/config.example.yaml /app/config.example.yaml
+COPY configs/config.example.yaml /app/config.yaml
 
 ENV TG_NEWS_BOT_TOKEN=""
+ENV TG_NEWS_CONFIG="/app/config.yaml"
 ENV TG_NEWS_LLM_ENDPOINT="http://host.docker.internal:8080"
+ENV TG_NEWS_APP_HEALTH_HOST="0.0.0.0"
 ENV TG_NEWS_APP_HEALTH_PORT="9100"
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -32,4 +34,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 EXPOSE 9100
 
 ENTRYPOINT ["/app/bot"]
-CMD ["--config", "config.example.yaml"]

@@ -64,7 +64,7 @@ func (c *Client) RankByTopic(ctx context.Context, items []models.NewsItem, topic
 		return fallbackByTopic(sorted, topic, maxN), false, nil
 	}
 
-	c.logger.Debug("llm: topic raw response", slog.String("response", content))
+	c.logger.Debug("llm: topic response received", slog.Int("response_len", len([]rune(content))))
 
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" || strings.Contains(strings.ToUpper(trimmed), noRelevantSentinel) {
