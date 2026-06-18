@@ -163,12 +163,19 @@ func normalizeSettings(st models.SubscriberSettings) models.SubscriberSettings {
 	if st.DigestTopN <= 0 {
 		st.DigestTopN = 10
 	}
-	switch st.DigestFormat {
-	case "short", "detailed":
-	default:
-		st.DigestFormat = "detailed"
-	}
+	st.DigestFormat = NormalizeDigestMode(st.DigestFormat)
 	return st
+}
+
+func NormalizeDigestMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "short", "brief":
+		return "brief"
+	case "detailed", "executive", "links", "why_it_matters":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return "detailed"
+	}
 }
 
 func (s *Store) upsertSubscriberPreference(ctx context.Context, chatID int64, column string, value any) error {
@@ -224,7 +231,7 @@ func (s *Store) SetSubscriberDigestTopN(ctx context.Context, chatID int64, topN 
 }
 
 func (s *Store) SetSubscriberDigestFormat(ctx context.Context, chatID int64, format string) error {
-	return s.upsertSubscriberPreference(ctx, chatID, "digest_format", format)
+	return s.upsertSubscriberPreference(ctx, chatID, "digest_format", NormalizeDigestMode(format))
 }
 
 func (s *Store) SetSubscriberQuietWeekends(ctx context.Context, chatID int64, quiet bool) error {

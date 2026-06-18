@@ -37,7 +37,7 @@ type SubscriberSettings struct {
 	Timezone           string `json:"timezone"`
 	DeliveryTime       string `json:"delivery_time"`
 	DigestTopN         int    `json:"digest_top_n"`
-	DigestFormat       string `json:"digest_format"` // short, detailed
+	DigestFormat       string `json:"digest_format"` // brief, detailed, executive, links, why_it_matters
 	QuietWeekends      bool   `json:"quiet_weekends"`
 	LastDigestSentDate string `json:"last_digest_sent_date,omitempty"`
 }

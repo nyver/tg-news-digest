@@ -442,7 +442,7 @@ func TestSubscriberSettings_DefaultsAndSetters(t *testing.T) {
 	require.NoError(t, s.SetSubscriberTimezone(ctx, 42, "UTC"))
 	require.NoError(t, s.SetSubscriberDeliveryTime(ctx, 42, "20:00"))
 	require.NoError(t, s.SetSubscriberDigestTopN(ctx, 42, 20))
-	require.NoError(t, s.SetSubscriberDigestFormat(ctx, 42, "short"))
+	require.NoError(t, s.SetSubscriberDigestFormat(ctx, 42, "executive"))
 	require.NoError(t, s.SetSubscriberQuietWeekends(ctx, 42, true))
 
 	st, err = s.GetSubscriberSettings(ctx, 42)
@@ -451,8 +451,13 @@ func TestSubscriberSettings_DefaultsAndSetters(t *testing.T) {
 	assert.Equal(t, "UTC", st.Timezone)
 	assert.Equal(t, "20:00", st.DeliveryTime)
 	assert.Equal(t, 20, st.DigestTopN)
-	assert.Equal(t, "short", st.DigestFormat)
+	assert.Equal(t, "executive", st.DigestFormat)
 	assert.True(t, st.QuietWeekends)
+
+	require.NoError(t, s.SetSubscriberDigestFormat(ctx, 42, "short"))
+	st, err = s.GetSubscriberSettings(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "brief", st.DigestFormat)
 }
 
 func TestGetDueSubscriberSettings(t *testing.T) {

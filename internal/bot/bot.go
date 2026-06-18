@@ -249,6 +249,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.cmdRemoveCategory(ctx, chatID, msg)
 	case "language":
 		b.cmdLanguage(ctx, chatID, msg)
+	case "mode":
+		b.cmdMode(ctx, chatID, msg)
 	case "settings":
 		b.cmdSettings(ctx, chatID, msg)
 	default:
@@ -354,14 +356,28 @@ func (b *Bot) cmdDigestTopic(ctx context.Context, msg *tgbotapi.Message, topic s
 		header += " (по ключевым словам)"
 	}
 
-	if lang, err := b.store.GetSubscriberLanguage(ctx, chatID); err != nil {
-		b.logger.Warn("bot: get subscriber language failed",
-			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
-	} else {
-		ranked, header = b.translateForLanguage(ctx, ranked, header, lang)
+	settings, settingsErr := b.store.GetSubscriberSettings(ctx, chatID)
+	if settingsErr != nil {
+		b.logger.Warn("bot: get subscriber settings failed",
+			slog.Int64("chat_id", chatID), slog.String("error", settingsErr.Error()))
+		settings = models.SubscriberSettings{DigestTopN: b.formatter.TopN(), DigestFormat: "detailed"}
 	}
 
-	for _, part := range b.formatter.TopicDigestParts(header, ranked) {
+	if settingsErr == nil {
+		lang := settings.Language
+		ranked, header = b.translateForLanguage(ctx, ranked, header, lang)
+	}
+	if settingsErr != nil {
+		if lang, err := b.store.GetSubscriberLanguage(ctx, chatID); err != nil {
+			b.logger.Warn("bot: get subscriber language failed",
+				slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+		} else {
+			ranked, header = b.translateForLanguage(ctx, ranked, header, lang)
+		}
+	}
+
+	opts := formatter.DigestOptions{TopN: settings.DigestTopN, Format: settings.DigestFormat}
+	for _, part := range b.formatter.TopicDigestPartsWithOptions(header, ranked, opts) {
 		if err := b.SendRaw(ctx, chatID, part); err != nil {
 			b.logger.Warn("bot: send topic digest part failed",
 				slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
@@ -440,10 +456,46 @@ func (b *Bot) cmdLanguage(ctx context.Context, chatID int64, msg *tgbotapi.Messa
 	b.reply(ctx, msg, fmt.Sprintf("✅ Язык дайджеста изменён на: %s", lang))
 }
 
+func (b *Bot) cmdMode(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
+	raw := strings.TrimSpace(msg.CommandArguments())
+	if raw == "" {
+		st, err := b.store.GetSubscriberSettings(ctx, chatID)
+		if err != nil {
+			b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка: %v", err))
+			return
+		}
+		b.reply(ctx, msg, fmt.Sprintf(
+			"Текущий режим дайджеста: %s\n\nДоступные режимы:\n/mode brief\n/mode detailed\n/mode executive\n/mode links\n/mode why_it_matters",
+			st.DigestFormat,
+		))
+		return
+	}
+
+	if !isValidDigestMode(raw) {
+		b.reply(ctx, msg, "Неизвестный режим. Используйте: brief, detailed, executive, links, why_it_matters")
+		return
+	}
+	mode := storage.NormalizeDigestMode(raw)
+	if err := b.store.SetSubscriberDigestFormat(ctx, chatID, mode); err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка: %v", err))
+		return
+	}
+	b.reply(ctx, msg, fmt.Sprintf("✅ Режим дайджеста изменён на: %s", mode))
+}
+
+func isValidDigestMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "brief", "detailed", "executive", "links", "why_it_matters", "short":
+		return true
+	default:
+		return false
+	}
+}
+
 func (b *Bot) cmdSettings(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
 	st, err := b.store.GetSubscriberSettings(ctx, chatID)
 	if err != nil {
-		b.reply(ctx, msg, fmt.Sprintf("вќЊ РћС€РёР±РєР°: %v", err))
+		b.reply(ctx, msg, fmt.Sprintf("❌ Ошибка: %v", err))
 		return
 	}
 
@@ -463,6 +515,7 @@ func settingsText(st models.SubscriberSettings) string {
 		format = "краткий"
 	}
 	quiet := "выключен"
+	format = digestModeLabel(st.DigestFormat)
 	if st.QuietWeekends {
 		quiet = "включен"
 	}
@@ -472,10 +525,27 @@ func settingsText(st models.SubscriberSettings) string {
 	)
 }
 
+func digestModeLabel(mode string) string {
+	switch storage.NormalizeDigestMode(mode) {
+	case "brief":
+		return "brief"
+	case "detailed":
+		return "detailed"
+	case "executive":
+		return "executive"
+	case "links":
+		return "links"
+	case "why_it_matters":
+		return "why_it_matters"
+	default:
+		return "detailed"
+	}
+}
+
 func (b *Bot) buildSettingsKeyboard(st models.SubscriberSettings) tgbotapi.InlineKeyboardMarkup {
 	formatLabel := "Краткий формат"
-	formatData := "set:format:short"
-	if st.DigestFormat == "short" {
+	formatData := "set:format:brief"
+	if st.DigestFormat == "brief" {
 		formatLabel = "Подробный формат"
 		formatData = "set:format:detailed"
 	}
@@ -498,6 +568,9 @@ func (b *Bot) buildSettingsKeyboard(st models.SubscriberSettings) tgbotapi.Inlin
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData(formatLabel, formatData),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Режим", "set:menu:modes"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData(quietLabel, quietData),
@@ -539,6 +612,21 @@ func buildSettingsSubmenuKeyboard(kind string) tgbotapi.InlineKeyboardMarkup {
 			),
 			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Назад", "set:back")),
 		)
+	case "modes":
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Brief", "set:mode:brief"),
+				tgbotapi.NewInlineKeyboardButtonData("Detailed", "set:mode:detailed"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Executive", "set:mode:executive"),
+				tgbotapi.NewInlineKeyboardButtonData("Links", "set:mode:links"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Why it matters", "set:mode:why_it_matters"),
+			),
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Назад", "set:back")),
+		)
 	case "topics":
 		return tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(
@@ -563,6 +651,8 @@ func settingsSubmenuText(kind string) string {
 		return "Выберите время доставки дайджеста."
 	case "tz":
 		return "Выберите timezone для доставки."
+	case "modes":
+		return "Выберите режим дайджеста."
 	case "topics":
 		return "Язык, категории и кастомные темы.\n\nСвои темы: /addcategory <тема>\nУдалить тему: /removecategory <тема>"
 	default:
@@ -810,6 +900,8 @@ func (b *Bot) handleSettingsCallback(ctx context.Context, cq *tgbotapi.CallbackQ
 		}
 	case strings.HasPrefix(data, "set:format:"):
 		err = b.store.SetSubscriberDigestFormat(ctx, chatID, strings.TrimPrefix(data, "set:format:"))
+	case strings.HasPrefix(data, "set:mode:"):
+		err = b.store.SetSubscriberDigestFormat(ctx, chatID, strings.TrimPrefix(data, "set:mode:"))
 	case strings.HasPrefix(data, "set:weekends:"):
 		err = b.store.SetSubscriberQuietWeekends(ctx, chatID, strings.TrimPrefix(data, "set:weekends:") == "on")
 	case strings.HasPrefix(data, "set:lang:"):

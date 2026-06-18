@@ -642,6 +642,47 @@ func TestHandleSettingsCallback_SetsTopN(t *testing.T) {
 	assert.Equal(t, 20, st.DigestTopN)
 }
 
+func TestHandleSettingsCallback_SetsDigestMode(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	cq := &tgbotapi.CallbackQuery{
+		ID:   "cbid",
+		Data: "set:mode:why_it_matters",
+		Message: &tgbotapi.Message{
+			MessageID: 1,
+			Chat:      &tgbotapi.Chat{ID: 42},
+		},
+	}
+	bot.handleCallback(ctx, cq)
+
+	st, err := bot.store.GetSubscriberSettings(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "why_it_matters", st.DigestFormat)
+}
+
+func TestCmdMode_SetsDigestMode(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	text := "/mode links"
+	msg := &tgbotapi.Message{
+		MessageID: 1, Chat: &tgbotapi.Chat{ID: 42}, Text: text,
+		Entities: []tgbotapi.MessageEntity{{Type: "bot_command", Offset: 0, Length: 5}},
+	}
+	bot.cmdMode(ctx, 42, msg)
+
+	st, err := bot.store.GetSubscriberSettings(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "links", st.DigestFormat)
+}
+
 func TestCmdDigestTopic_TranslatesForChatLanguage(t *testing.T) {
 	ctx := context.Background()
 	bot := newTestBot(t, nil)

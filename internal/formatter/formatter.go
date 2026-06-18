@@ -29,7 +29,7 @@ type Formatter struct {
 
 type DigestOptions struct {
 	TopN   int
-	Format string // short, detailed
+	Format string // brief, detailed, executive, links, why_it_matters
 }
 
 // New creates a new Formatter.
@@ -130,12 +130,19 @@ func (f *Formatter) normalizeOptions(opts DigestOptions) DigestOptions {
 	if opts.TopN <= 0 {
 		opts.TopN = f.topN
 	}
-	switch opts.Format {
-	case "short", "detailed":
-	default:
-		opts.Format = "detailed"
-	}
+	opts.Format = NormalizeDigestMode(opts.Format)
 	return opts
+}
+
+func NormalizeDigestMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "short", "brief":
+		return "brief"
+	case "detailed", "executive", "links", "why_it_matters":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return "detailed"
+	}
 }
 
 func limitItems(items []models.RankedNewsItem, topN int) []models.RankedNewsItem {
@@ -151,47 +158,118 @@ func digestBodyItem(item models.RankedNewsItem, rank int, mode ParseMode) string
 }
 
 func digestBodyItemWithFormat(item models.RankedNewsItem, rank int, mode ParseMode, format string) string {
+	format = NormalizeDigestMode(format)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%d. ", rank))
 	switch mode {
 	case HTML:
 		title := stripHTML(item.Title)
 		summary := itemSummary(item)
-		sb.WriteString(fmt.Sprintf("<b>%s</b>\n", escapeHTML(title)))
-		if format != "short" {
+		sb.WriteString(fmt.Sprintf("<b>%s</b>", escapeHTML(title)))
+		switch format {
+		case "brief":
+			sb.WriteString("\n")
 			sb.WriteString(escapeHTML(summary))
-		}
-		if link := safeLink(item.Link); link != "" {
-			if format == "short" {
-				sb.WriteString(htmlReadMore(link, ""))
-			} else {
+			if link := safeLink(item.Link); link != "" {
 				sb.WriteString(htmlReadMore(link, summary))
 			}
-		}
-		if format != "short" {
+		case "executive":
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("<b>Вывод:</b> %s", escapeHTML(summary)))
+			if meta := buildMeta(item, mode); meta != "" {
+				sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
+			}
+		case "links":
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString("\n")
+				sb.WriteString(fmt.Sprintf("<a href=\"%s\">%s</a>", escapeHTML(link), escapeHTML(link)))
+			}
+			if meta := buildMeta(item, mode); meta != "" {
+				sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
+			}
+		case "why_it_matters":
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("<b>Коротко:</b> %s", escapeHTML(summary)))
+			sb.WriteString(fmt.Sprintf("\n<b>Почему важно:</b> %s", escapeHTML(whyItMatters(item))))
+			if item.Source != "" {
+				sb.WriteString(fmt.Sprintf("\n<b>Источник:</b> %s", escapeHTML(item.Source)))
+			}
+			if item.Category != "" {
+				sb.WriteString(fmt.Sprintf("\n<b>Категория:</b> %s", escapeHTML(item.Category)))
+			}
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString(htmlReadMore(link, summary))
+			}
+		default:
+			sb.WriteString("\n")
+			sb.WriteString(escapeHTML(summary))
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString(htmlReadMore(link, summary))
+			}
 			if meta := buildMeta(item, mode); meta != "" {
 				sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
 			}
 		}
 	case MarkdownV2:
-		sb.WriteString(fmt.Sprintf("*%s*\n", escapeMD(stripHTML(item.Title))))
-		if format != "short" {
-			sb.WriteString(escapeMD(itemSummary(item)))
-		}
-		if link := safeLink(item.Link); link != "" {
-			if format == "short" {
-				sb.WriteString(markdownReadMore(link, ""))
-			} else {
-				sb.WriteString(markdownReadMore(link, itemSummary(item)))
+		title := stripHTML(item.Title)
+		summary := itemSummary(item)
+		sb.WriteString(fmt.Sprintf("*%s*", escapeMD(title)))
+		switch format {
+		case "brief":
+			sb.WriteString("\n")
+			sb.WriteString(escapeMD(summary))
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString(markdownReadMore(link, summary))
 			}
-		}
-		if format != "short" {
+		case "executive":
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("*Вывод:* %s", escapeMD(summary)))
+			if meta := buildMeta(item, mode); meta != "" {
+				sb.WriteString(fmt.Sprintf("\n_%s_", meta))
+			}
+		case "links":
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString("\n")
+				sb.WriteString(fmt.Sprintf("[%s](%s)", escapeMD(link), link))
+			}
+			if meta := buildMeta(item, mode); meta != "" {
+				sb.WriteString(fmt.Sprintf("\n_%s_", meta))
+			}
+		case "why_it_matters":
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("*Коротко:* %s", escapeMD(summary)))
+			sb.WriteString(fmt.Sprintf("\n*Почему важно:* %s", escapeMD(whyItMatters(item))))
+			if item.Source != "" {
+				sb.WriteString(fmt.Sprintf("\n*Источник:* %s", escapeMD(item.Source)))
+			}
+			if item.Category != "" {
+				sb.WriteString(fmt.Sprintf("\n*Категория:* %s", escapeMD(item.Category)))
+			}
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString(markdownReadMore(link, summary))
+			}
+		default:
+			sb.WriteString("\n")
+			sb.WriteString(escapeMD(summary))
+			if link := safeLink(item.Link); link != "" {
+				sb.WriteString(markdownReadMore(link, summary))
+			}
 			if meta := buildMeta(item, mode); meta != "" {
 				sb.WriteString(fmt.Sprintf("\n_%s_", meta))
 			}
 		}
 	}
 	return sb.String()
+}
+
+func whyItMatters(item models.RankedNewsItem) string {
+	if item.Category != "" {
+		return fmt.Sprintf("это влияет на направление «%s» и помогает быстрее понять, какие изменения стоит учесть.", item.Category)
+	}
+	if item.Source != "" {
+		return fmt.Sprintf("материал от %s помогает оценить важный сигнал без чтения полного текста.", item.Source)
+	}
+	return "это может быть важным сигналом для решений, продуктов или исследований в ближайшее время."
 }
 
 // safeLink returns link only if it uses http/https scheme; otherwise returns "".
