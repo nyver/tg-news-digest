@@ -4,7 +4,7 @@ import "time"
 
 // NewsItem represents a single RSS feed entry.
 type NewsItem struct {
-	ID          string    `json:"id"`           // SHA256(title + link)
+	ID          string    `json:"id"` // SHA256(title + link)
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	Link        string    `json:"link"`
@@ -25,9 +25,21 @@ type RankedNewsItem struct {
 
 // Subscriber represents a Telegram subscriber.
 type Subscriber struct {
-	ChatID   int64     `json:"chat_id"`
+	ChatID    int64     `json:"chat_id"`
 	CreatedAt time.Time `json:"created_at"`
-	Active   bool      `json:"active"`
+	Active    bool      `json:"active"`
+}
+
+// SubscriberSettings stores per-chat digest preferences.
+type SubscriberSettings struct {
+	ChatID             int64  `json:"chat_id"`
+	Language           string `json:"language"`
+	Timezone           string `json:"timezone"`
+	DeliveryTime       string `json:"delivery_time"`
+	DigestTopN         int    `json:"digest_top_n"`
+	DigestFormat       string `json:"digest_format"` // short, detailed
+	QuietWeekends      bool   `json:"quiet_weekends"`
+	LastDigestSentDate string `json:"last_digest_sent_date,omitempty"`
 }
 
 // DigestRun represents a single digest generation run.

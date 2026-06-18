@@ -114,6 +114,19 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("storage: alter subscribers: %w", langErr)
 	}
 
+	for _, alter := range []string{
+		`ALTER TABLE subscribers ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Europe/Moscow'`,
+		`ALTER TABLE subscribers ADD COLUMN delivery_time TEXT NOT NULL DEFAULT '09:00'`,
+		`ALTER TABLE subscribers ADD COLUMN digest_top_n INTEGER NOT NULL DEFAULT 10`,
+		`ALTER TABLE subscribers ADD COLUMN digest_format TEXT NOT NULL DEFAULT 'detailed'`,
+		`ALTER TABLE subscribers ADD COLUMN quiet_weekends BOOLEAN NOT NULL DEFAULT 0`,
+		`ALTER TABLE subscribers ADD COLUMN last_digest_sent_date TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.db.ExecContext(ctx, alter); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("storage: alter subscribers settings: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -137,18 +150,101 @@ func (s *Store) Unsubscribe(ctx context.Context, chatID int64) error {
 	return err
 }
 
+func normalizeSettings(st models.SubscriberSettings) models.SubscriberSettings {
+	if st.Language == "" {
+		st.Language = "ru"
+	}
+	if st.Timezone == "" {
+		st.Timezone = "Europe/Moscow"
+	}
+	if st.DeliveryTime == "" {
+		st.DeliveryTime = "09:00"
+	}
+	if st.DigestTopN <= 0 {
+		st.DigestTopN = 10
+	}
+	switch st.DigestFormat {
+	case "short", "detailed":
+	default:
+		st.DigestFormat = "detailed"
+	}
+	return st
+}
+
+func (s *Store) upsertSubscriberPreference(ctx context.Context, chatID int64, column string, value any) error {
+	_, err := s.db.ExecContext(ctx,
+		fmt.Sprintf(`INSERT INTO subscribers (chat_id, created_at, active, %s)
+		 VALUES (?, CURRENT_TIMESTAMP, 0, ?)
+		 ON CONFLICT(chat_id) DO UPDATE SET %s = excluded.%s`, column, column, column),
+		chatID, value,
+	)
+	return err
+}
+
+// GetSubscriberSettings returns the chat's digest preferences, defaulting in
+// memory when the chat has not interacted with the bot yet.
+func (s *Store) GetSubscriberSettings(ctx context.Context, chatID int64) (models.SubscriberSettings, error) {
+	var st models.SubscriberSettings
+	var quiet int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT chat_id, language, timezone, delivery_time, digest_top_n, digest_format,
+		        quiet_weekends, COALESCE(last_digest_sent_date, '')
+		 FROM subscribers WHERE chat_id = ?`, chatID,
+	).Scan(
+		&st.ChatID,
+		&st.Language,
+		&st.Timezone,
+		&st.DeliveryTime,
+		&st.DigestTopN,
+		&st.DigestFormat,
+		&quiet,
+		&st.LastDigestSentDate,
+	)
+	if err == sql.ErrNoRows {
+		st.ChatID = chatID
+		return normalizeSettings(st), nil
+	}
+	if err != nil {
+		return models.SubscriberSettings{}, err
+	}
+	st.QuietWeekends = quiet == 1
+	return normalizeSettings(st), nil
+}
+
+func (s *Store) SetSubscriberTimezone(ctx context.Context, chatID int64, timezone string) error {
+	return s.upsertSubscriberPreference(ctx, chatID, "timezone", timezone)
+}
+
+func (s *Store) SetSubscriberDeliveryTime(ctx context.Context, chatID int64, deliveryTime string) error {
+	return s.upsertSubscriberPreference(ctx, chatID, "delivery_time", deliveryTime)
+}
+
+func (s *Store) SetSubscriberDigestTopN(ctx context.Context, chatID int64, topN int) error {
+	return s.upsertSubscriberPreference(ctx, chatID, "digest_top_n", topN)
+}
+
+func (s *Store) SetSubscriberDigestFormat(ctx context.Context, chatID int64, format string) error {
+	return s.upsertSubscriberPreference(ctx, chatID, "digest_format", format)
+}
+
+func (s *Store) SetSubscriberQuietWeekends(ctx context.Context, chatID int64, quiet bool) error {
+	value := 0
+	if quiet {
+		value = 1
+	}
+	return s.upsertSubscriberPreference(ctx, chatID, "quiet_weekends", value)
+}
+
+func (s *Store) MarkSubscriberDigestSent(ctx context.Context, chatID int64, localDate string) error {
+	return s.upsertSubscriberPreference(ctx, chatID, "last_digest_sent_date", localDate)
+}
+
 // SetSubscriberLanguage sets the digest language preference for a chat.
 // If the chat has never subscribed, a row is created with active = 0 so the
 // preference is remembered for when they do subscribe (SaveSubscriber's
 // ON CONFLICT only flips active, it never touches language).
 func (s *Store) SetSubscriberLanguage(ctx context.Context, chatID int64, language string) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO subscribers (chat_id, created_at, active, language)
-		 VALUES (?, CURRENT_TIMESTAMP, 0, ?)
-		 ON CONFLICT(chat_id) DO UPDATE SET language = excluded.language`,
-		chatID, language,
-	)
-	return err
+	return s.upsertSubscriberPreference(ctx, chatID, "language", language)
 }
 
 // GetSubscriberLanguage returns the chat's digest language, defaulting to "ru"
@@ -194,6 +290,81 @@ func (s *Store) GetActiveChatsByLanguage(ctx context.Context) (map[string][]int6
 		result[language] = append(result[language], chatID)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) GetActiveSubscriberSettings(ctx context.Context) ([]models.SubscriberSettings, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT chat_id, language, timezone, delivery_time, digest_top_n, digest_format,
+		        quiet_weekends, COALESCE(last_digest_sent_date, '')
+		 FROM subscribers WHERE active = 1 ORDER BY chat_id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []models.SubscriberSettings
+	for rows.Next() {
+		var st models.SubscriberSettings
+		var quiet int
+		if err := rows.Scan(
+			&st.ChatID,
+			&st.Language,
+			&st.Timezone,
+			&st.DeliveryTime,
+			&st.DigestTopN,
+			&st.DigestFormat,
+			&quiet,
+			&st.LastDigestSentDate,
+		); err != nil {
+			return nil, err
+		}
+		st.QuietWeekends = quiet == 1
+		result = append(result, normalizeSettings(st))
+	}
+	return result, rows.Err()
+}
+
+// GetDueSubscriberSettings returns active subscribers whose local delivery
+// time is due at nowUTC and who have not received today's scheduled digest.
+func (s *Store) GetDueSubscriberSettings(ctx context.Context, nowUTC time.Time) ([]models.SubscriberSettings, error) {
+	settings, err := s.GetActiveSubscriberSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var due []models.SubscriberSettings
+	for _, st := range settings {
+		loc, err := time.LoadLocation(st.Timezone)
+		if err != nil {
+			loc = time.UTC
+		}
+		localNow := nowUTC.In(loc)
+		localDate := localNow.Format("2006-01-02")
+		if st.LastDigestSentDate == localDate {
+			continue
+		}
+		if st.QuietWeekends && (localNow.Weekday() == time.Saturday || localNow.Weekday() == time.Sunday) {
+			continue
+		}
+		nowMinutes := localNow.Hour()*60 + localNow.Minute()
+		deliveryMinutes, ok := parseDeliveryMinutes(st.DeliveryTime)
+		if !ok {
+			continue
+		}
+		if nowMinutes >= deliveryMinutes {
+			due = append(due, st)
+		}
+	}
+	return due, nil
+}
+
+func parseDeliveryMinutes(deliveryTime string) (int, bool) {
+	t, err := time.Parse("15:04", deliveryTime)
+	if err != nil {
+		return 0, false
+	}
+	return t.Hour()*60 + t.Minute(), true
 }
 
 func (s *Store) IsActive(ctx context.Context, chatID int64) (bool, error) {

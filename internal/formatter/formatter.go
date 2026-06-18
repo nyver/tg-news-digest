@@ -27,6 +27,11 @@ type Formatter struct {
 	topN int
 }
 
+type DigestOptions struct {
+	TopN   int
+	Format string // short, detailed
+}
+
 // New creates a new Formatter.
 func New(mode ParseMode, topN int) *Formatter {
 	if topN <= 0 {
@@ -57,13 +62,24 @@ func PlainDigestHeader(date time.Time, topN int) string {
 // If a single item alone exceeds maxLen it is truncated with an ellipsis.
 func (f *Formatter) DigestParts(items []models.RankedNewsItem, date time.Time) []string {
 	header := DigestHeader(date, f.mode, f.topN)
-	return f.partsWithHeader(header, items)
+	return f.partsWithHeader(header, items, DigestOptions{TopN: f.topN, Format: "detailed"})
+}
+
+func (f *Formatter) DigestPartsWithOptions(items []models.RankedNewsItem, date time.Time, opts DigestOptions) []string {
+	opts = f.normalizeOptions(opts)
+	header := DigestHeader(date, f.mode, opts.TopN)
+	return f.partsWithHeader(header, items, opts)
 }
 
 // TopicDigestParts splits a topic-filtered digest into Telegram-safe chunks,
 // using a custom plain-text header (escaped/wrapped per the formatter's mode)
 // instead of the standard date-based "Топ-N" header.
 func (f *Formatter) TopicDigestParts(rawHeader string, items []models.RankedNewsItem) []string {
+	return f.TopicDigestPartsWithOptions(rawHeader, items, DigestOptions{TopN: f.topN, Format: "detailed"})
+}
+
+func (f *Formatter) TopicDigestPartsWithOptions(rawHeader string, items []models.RankedNewsItem, opts DigestOptions) []string {
+	opts = f.normalizeOptions(opts)
 	var header string
 	switch f.mode {
 	case HTML:
@@ -73,18 +89,20 @@ func (f *Formatter) TopicDigestParts(rawHeader string, items []models.RankedNews
 	default:
 		header = rawHeader
 	}
-	return f.partsWithHeader(header, items)
+	return f.partsWithHeader(header, items, opts)
 }
 
 // partsWithHeader splits items into Telegram-safe chunks (≤4096 runes each),
 // keeping the given pre-formatted header in the first chunk. Each news item
 // is kept intact; a single item that alone exceeds the limit is truncated.
-func (f *Formatter) partsWithHeader(header string, items []models.RankedNewsItem) []string {
+func (f *Formatter) partsWithHeader(header string, items []models.RankedNewsItem, opts DigestOptions) []string {
 	const maxLen = 4096
 
+	opts = f.normalizeOptions(opts)
+	items = limitItems(items, opts.TopN)
 	itemStrings := make([]string, len(items))
 	for i, item := range items {
-		itemStrings[i] = digestBodyItem(item, i+1, f.mode)
+		itemStrings[i] = digestBodyItemWithFormat(item, i+1, f.mode, opts.Format)
 		if runes := []rune(itemStrings[i]); len(runes) > maxLen {
 			itemStrings[i] = string(runes[:maxLen-1]) + "…"
 		}
@@ -108,8 +126,31 @@ func (f *Formatter) partsWithHeader(header string, items []models.RankedNewsItem
 	return parts
 }
 
+func (f *Formatter) normalizeOptions(opts DigestOptions) DigestOptions {
+	if opts.TopN <= 0 {
+		opts.TopN = f.topN
+	}
+	switch opts.Format {
+	case "short", "detailed":
+	default:
+		opts.Format = "detailed"
+	}
+	return opts
+}
+
+func limitItems(items []models.RankedNewsItem, topN int) []models.RankedNewsItem {
+	if topN <= 0 || len(items) <= topN {
+		return items
+	}
+	return items[:topN]
+}
+
 // digestBodyItem formats a single ranked item with the given display rank number.
 func digestBodyItem(item models.RankedNewsItem, rank int, mode ParseMode) string {
+	return digestBodyItemWithFormat(item, rank, mode, "detailed")
+}
+
+func digestBodyItemWithFormat(item models.RankedNewsItem, rank int, mode ParseMode, format string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%d. ", rank))
 	switch mode {
@@ -117,21 +158,37 @@ func digestBodyItem(item models.RankedNewsItem, rank int, mode ParseMode) string
 		title := stripHTML(item.Title)
 		summary := itemSummary(item)
 		sb.WriteString(fmt.Sprintf("<b>%s</b>\n", escapeHTML(title)))
-		sb.WriteString(escapeHTML(summary))
-		if link := safeLink(item.Link); link != "" {
-			sb.WriteString(htmlReadMore(link, summary))
+		if format != "short" {
+			sb.WriteString(escapeHTML(summary))
 		}
-		if meta := buildMeta(item, mode); meta != "" {
-			sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
+		if link := safeLink(item.Link); link != "" {
+			if format == "short" {
+				sb.WriteString(htmlReadMore(link, ""))
+			} else {
+				sb.WriteString(htmlReadMore(link, summary))
+			}
+		}
+		if format != "short" {
+			if meta := buildMeta(item, mode); meta != "" {
+				sb.WriteString(fmt.Sprintf("\n<i>%s</i>", meta))
+			}
 		}
 	case MarkdownV2:
 		sb.WriteString(fmt.Sprintf("*%s*\n", escapeMD(stripHTML(item.Title))))
-		sb.WriteString(escapeMD(itemSummary(item)))
-		if link := safeLink(item.Link); link != "" {
-			sb.WriteString(markdownReadMore(link, itemSummary(item)))
+		if format != "short" {
+			sb.WriteString(escapeMD(itemSummary(item)))
 		}
-		if meta := buildMeta(item, mode); meta != "" {
-			sb.WriteString(fmt.Sprintf("\n_%s_", meta))
+		if link := safeLink(item.Link); link != "" {
+			if format == "short" {
+				sb.WriteString(markdownReadMore(link, ""))
+			} else {
+				sb.WriteString(markdownReadMore(link, itemSummary(item)))
+			}
+		}
+		if format != "short" {
+			if meta := buildMeta(item, mode); meta != "" {
+				sb.WriteString(fmt.Sprintf("\n_%s_", meta))
+			}
 		}
 	}
 	return sb.String()
@@ -215,6 +272,9 @@ func markdownReadMore(link, precedingText string) string {
 
 func readMorePrefix(precedingText string) string {
 	precedingText = strings.TrimSpace(precedingText)
+	if precedingText == "" {
+		return ""
+	}
 	if strings.HasSuffix(precedingText, ".") ||
 		strings.HasSuffix(precedingText, "!") ||
 		strings.HasSuffix(precedingText, "?") ||

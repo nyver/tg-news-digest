@@ -620,6 +620,28 @@ func TestCmdLanguage_SetsLanguage(t *testing.T) {
 	assert.Equal(t, "English", lang)
 }
 
+func TestHandleSettingsCallback_SetsTopN(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestBot(t, nil)
+	mockAPI := bot.api.(*mockTGAPI)
+
+	mockAPI.On("Send", mock.Anything).Return(tgbotapi.Message{}, nil)
+
+	cq := &tgbotapi.CallbackQuery{
+		ID:   "cbid",
+		Data: "set:top:20",
+		Message: &tgbotapi.Message{
+			MessageID: 1,
+			Chat:      &tgbotapi.Chat{ID: 42},
+		},
+	}
+	bot.handleCallback(ctx, cq)
+
+	st, err := bot.store.GetSubscriberSettings(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, 20, st.DigestTopN)
+}
+
 func TestCmdDigestTopic_TranslatesForChatLanguage(t *testing.T) {
 	ctx := context.Background()
 	bot := newTestBot(t, nil)

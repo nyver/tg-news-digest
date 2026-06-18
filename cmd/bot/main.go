@@ -63,7 +63,7 @@ func main() {
 		logger.Error("failed to load schedule timezone", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	runPipeline := buildPipeline(logger, store, rssFetcher, llmClient, cfg.App.DigestTopN, scheduleLoc)
+	runPipeline := buildPipeline(logger, store, rssFetcher, llmClient, maxDigestTopN(cfg.App.DigestTopN), scheduleLoc)
 
 	// Initialize bot — use a pointer so the broadcastFn can reference it
 	var botRef *bot.Bot
@@ -119,8 +119,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Schedule daily digest.
-	if err := sched.AddJob(cfg.Schedule.Cron, func(ctx context.Context) error {
+	// Personal schedules are checked every minute. Subscribers without custom
+	// settings keep the old default: 09:00 Europe/Moscow.
+	if err := sched.AddJob("* * * * *", func(ctx context.Context) error {
+		now := time.Now().UTC()
+		due, err := store.GetDueSubscriberSettings(ctx, now)
+		if err != nil {
+			return fmt.Errorf("scheduler: get due subscribers: %w", err)
+		}
+		if len(due) == 0 {
+			logger.Debug("scheduler: no subscribers due")
+			return nil
+		}
+
 		_, ranked, err := runPipeline(ctx, "cron")
 		if err != nil {
 			return err
@@ -129,12 +140,23 @@ func main() {
 			logger.Info("pipeline: no items to broadcast")
 			return nil
 		}
-		if err := b.Broadcast(ctx, ranked, time.Now()); err != nil {
+		if err := b.BroadcastTo(ctx, ranked, time.Now(), due); err != nil {
 			if errors.Is(err, bot.ErrBroadcastNoDeliveries) {
 				logger.Info("pipeline: broadcast skipped, no matching subscriber filters")
-				return nil
+			} else {
+				return err
 			}
-			return err
+		}
+		for _, st := range due {
+			loc, err := time.LoadLocation(st.Timezone)
+			if err != nil {
+				loc = time.UTC
+			}
+			localDate := now.In(loc).Format("2006-01-02")
+			if err := store.MarkSubscriberDigestSent(ctx, st.ChatID, localDate); err != nil {
+				logger.Warn("scheduler: mark subscriber digest sent failed",
+					slog.Int64("chat_id", st.ChatID), slog.String("error", err.Error()))
+			}
 		}
 		return nil
 	}); err != nil {
@@ -204,6 +226,13 @@ func main() {
 	// Grace period for cleanup operations and goroutine shutdown
 	time.Sleep(2 * time.Second)
 	logger.Info("bot: stopped")
+}
+
+func maxDigestTopN(configured int) int {
+	if configured < 20 {
+		return 20
+	}
+	return configured
 }
 
 // buildPipeline creates the digest pipeline: fetch RSS → rank with LLM → save.

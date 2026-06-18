@@ -423,3 +423,79 @@ func TestGetActiveChatsByLanguage(t *testing.T) {
 	assert.ElementsMatch(t, []int64{2, 3}, groups["English"])
 	assert.NotContains(t, groups["English"], int64(4))
 }
+
+func TestSubscriberSettings_DefaultsAndSetters(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	st, err := s.GetSubscriberSettings(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), st.ChatID)
+	assert.Equal(t, "ru", st.Language)
+	assert.Equal(t, "Europe/Moscow", st.Timezone)
+	assert.Equal(t, "09:00", st.DeliveryTime)
+	assert.Equal(t, 10, st.DigestTopN)
+	assert.Equal(t, "detailed", st.DigestFormat)
+	assert.False(t, st.QuietWeekends)
+
+	require.NoError(t, s.SetSubscriberLanguage(ctx, 42, "English"))
+	require.NoError(t, s.SetSubscriberTimezone(ctx, 42, "UTC"))
+	require.NoError(t, s.SetSubscriberDeliveryTime(ctx, 42, "20:00"))
+	require.NoError(t, s.SetSubscriberDigestTopN(ctx, 42, 20))
+	require.NoError(t, s.SetSubscriberDigestFormat(ctx, 42, "short"))
+	require.NoError(t, s.SetSubscriberQuietWeekends(ctx, 42, true))
+
+	st, err = s.GetSubscriberSettings(ctx, 42)
+	require.NoError(t, err)
+	assert.Equal(t, "English", st.Language)
+	assert.Equal(t, "UTC", st.Timezone)
+	assert.Equal(t, "20:00", st.DeliveryTime)
+	assert.Equal(t, 20, st.DigestTopN)
+	assert.Equal(t, "short", st.DigestFormat)
+	assert.True(t, st.QuietWeekends)
+}
+
+func TestGetDueSubscriberSettings(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SaveSubscriber(ctx, 1))
+	require.NoError(t, s.SetSubscriberTimezone(ctx, 1, "UTC"))
+	require.NoError(t, s.SetSubscriberDeliveryTime(ctx, 1, "09:00"))
+
+	require.NoError(t, s.SaveSubscriber(ctx, 2))
+	require.NoError(t, s.SetSubscriberTimezone(ctx, 2, "UTC"))
+	require.NoError(t, s.SetSubscriberDeliveryTime(ctx, 2, "10:00"))
+
+	now := time.Date(2026, 6, 18, 9, 0, 0, 0, time.UTC)
+	due, err := s.GetDueSubscriberSettings(ctx, now)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	assert.Equal(t, int64(1), due[0].ChatID)
+
+	later := time.Date(2026, 6, 18, 9, 30, 0, 0, time.UTC)
+	due, err = s.GetDueSubscriberSettings(ctx, later)
+	require.NoError(t, err)
+	require.Len(t, due, 1)
+	assert.Equal(t, int64(1), due[0].ChatID)
+
+	require.NoError(t, s.MarkSubscriberDigestSent(ctx, 1, "2026-06-18"))
+	due, err = s.GetDueSubscriberSettings(ctx, now)
+	require.NoError(t, err)
+	assert.Empty(t, due)
+}
+
+func TestGetDueSubscriberSettings_QuietWeekends(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SaveSubscriber(ctx, 1))
+	require.NoError(t, s.SetSubscriberTimezone(ctx, 1, "UTC"))
+	require.NoError(t, s.SetSubscriberDeliveryTime(ctx, 1, "09:00"))
+	require.NoError(t, s.SetSubscriberQuietWeekends(ctx, 1, true))
+
+	saturday := time.Date(2026, 6, 20, 9, 0, 0, 0, time.UTC)
+	due, err := s.GetDueSubscriberSettings(ctx, saturday)
+	require.NoError(t, err)
+	assert.Empty(t, due)
+}

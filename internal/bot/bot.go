@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -248,6 +249,8 @@ func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
 		b.cmdRemoveCategory(ctx, chatID, msg)
 	case "language":
 		b.cmdLanguage(ctx, chatID, msg)
+	case "settings":
+		b.cmdSettings(ctx, chatID, msg)
 	default:
 		b.reply(ctx, msg, formatter.UnknownCommandMessage(formatter.ParseMode(b.cfg.ParseMode)))
 	}
@@ -437,6 +440,136 @@ func (b *Bot) cmdLanguage(ctx context.Context, chatID int64, msg *tgbotapi.Messa
 	b.reply(ctx, msg, fmt.Sprintf("✅ Язык дайджеста изменён на: %s", lang))
 }
 
+func (b *Bot) cmdSettings(ctx context.Context, chatID int64, msg *tgbotapi.Message) {
+	st, err := b.store.GetSubscriberSettings(ctx, chatID)
+	if err != nil {
+		b.reply(ctx, msg, fmt.Sprintf("вќЊ РћС€РёР±РєР°: %v", err))
+		return
+	}
+
+	cfg := tgbotapi.NewMessage(chatID, settingsText(st))
+	cfg.ReplyMarkup = b.buildSettingsKeyboard(st)
+	cfg.ReplyToMessageID = msg.MessageID
+
+	if _, err := b.api.Send(cfg); err != nil {
+		b.logger.Error("bot: send settings keyboard failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
+}
+
+func settingsText(st models.SubscriberSettings) string {
+	format := "подробный"
+	if st.DigestFormat == "short" {
+		format = "краткий"
+	}
+	quiet := "выключен"
+	if st.QuietWeekends {
+		quiet = "включен"
+	}
+	return fmt.Sprintf(
+		"⚙️ Настройки дайджеста\n\nВремя: %s\nTimezone: %s\nНовостей: %d\nФормат: %s\nТихий режим по выходным: %s\nЯзык: %s",
+		st.DeliveryTime, st.Timezone, st.DigestTopN, format, quiet, st.Language,
+	)
+}
+
+func (b *Bot) buildSettingsKeyboard(st models.SubscriberSettings) tgbotapi.InlineKeyboardMarkup {
+	formatLabel := "Краткий формат"
+	formatData := "set:format:short"
+	if st.DigestFormat == "short" {
+		formatLabel = "Подробный формат"
+		formatData = "set:format:detailed"
+	}
+	quietLabel := "Тихо по выходным"
+	quietData := "set:weekends:on"
+	if st.QuietWeekends {
+		quietLabel = "Будить по выходным"
+		quietData = "set:weekends:off"
+	}
+
+	return tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Время", "set:menu:time"),
+			tgbotapi.NewInlineKeyboardButtonData("Timezone", "set:menu:tz"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("5", "set:top:5"),
+			tgbotapi.NewInlineKeyboardButtonData("10", "set:top:10"),
+			tgbotapi.NewInlineKeyboardButtonData("20", "set:top:20"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(formatLabel, formatData),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData(quietLabel, quietData),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Язык и темы", "set:menu:topics"),
+		),
+	)
+}
+
+func buildSettingsSubmenuKeyboard(kind string) tgbotapi.InlineKeyboardMarkup {
+	switch kind {
+	case "time":
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("08:00", "set:time:08:00"),
+				tgbotapi.NewInlineKeyboardButtonData("09:00", "set:time:09:00"),
+				tgbotapi.NewInlineKeyboardButtonData("10:00", "set:time:10:00"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("18:00", "set:time:18:00"),
+				tgbotapi.NewInlineKeyboardButtonData("20:00", "set:time:20:00"),
+			),
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Назад", "set:back")),
+		)
+	case "tz":
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Moscow", "set:tz:Europe/Moscow"),
+				tgbotapi.NewInlineKeyboardButtonData("UTC", "set:tz:UTC"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("London", "set:tz:Europe/London"),
+				tgbotapi.NewInlineKeyboardButtonData("New York", "set:tz:America/New_York"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Dubai", "set:tz:Asia/Dubai"),
+				tgbotapi.NewInlineKeyboardButtonData("Almaty", "set:tz:Asia/Almaty"),
+			),
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Назад", "set:back")),
+		)
+	case "topics":
+		return tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Русский", "set:lang:ru"),
+				tgbotapi.NewInlineKeyboardButtonData("English", "set:lang:English"),
+			),
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("Категории", "set:menu:categories"),
+			),
+			tgbotapi.NewInlineKeyboardRow(tgbotapi.NewInlineKeyboardButtonData("Назад", "set:back")),
+		)
+	default:
+		return tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Назад", "set:back"),
+		))
+	}
+}
+
+func settingsSubmenuText(kind string) string {
+	switch kind {
+	case "time":
+		return "Выберите время доставки дайджеста."
+	case "tz":
+		return "Выберите timezone для доставки."
+	case "topics":
+		return "Язык, категории и кастомные темы.\n\nСвои темы: /addcategory <тема>\nУдалить тему: /removecategory <тема>"
+	default:
+		return "Настройки дайджеста."
+	}
+}
+
 // translateForLanguage translates items+header into lang via the configured
 // TranslateDigestFunc, falling back to the original (Russian) items/header on
 // any failure or if no translator is wired up. A Russian/empty lang is a no-op.
@@ -564,6 +697,11 @@ func (b *Bot) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) {
 		return
 	}
 
+	if strings.HasPrefix(cq.Data, "set:") {
+		b.handleSettingsCallback(ctx, cq)
+		return
+	}
+
 	categoryID, ok := strings.CutPrefix(cq.Data, "cat:")
 	if !ok {
 		return
@@ -614,6 +752,93 @@ func (b *Bot) handleCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) {
 	// Best-effort: acknowledge the tap so Telegram clears the loading spinner.
 	// The library tries to decode the result as a Message, which fails for the
 	// boolean answerCallbackQuery result — that decode error is expected and ignored.
+	_, _ = b.api.Send(tgbotapi.NewCallback(cq.ID, ""))
+}
+
+func (b *Bot) handleSettingsCallback(ctx context.Context, cq *tgbotapi.CallbackQuery) {
+	chatID := cq.Message.Chat.ID
+	data := cq.Data
+
+	if menu, ok := strings.CutPrefix(data, "set:menu:"); ok {
+		if menu == "categories" {
+			selected, err := b.store.GetSubscriberCategories(ctx, chatID)
+			if err != nil {
+				b.logger.Warn("bot: get subscriber categories failed",
+					slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+			}
+			edit := tgbotapi.NewEditMessageTextAndMarkup(chatID, cq.Message.MessageID,
+				"Выберите категории. Свои темы: /addcategory <тема>", b.buildCategoriesKeyboard(selected))
+			_, _ = b.api.Send(edit)
+			_, _ = b.api.Send(tgbotapi.NewCallback(cq.ID, ""))
+			return
+		}
+		edit := tgbotapi.NewEditMessageTextAndMarkup(chatID, cq.Message.MessageID,
+			settingsSubmenuText(menu), buildSettingsSubmenuKeyboard(menu))
+		_, _ = b.api.Send(edit)
+		_, _ = b.api.Send(tgbotapi.NewCallback(cq.ID, ""))
+		return
+	}
+
+	if data == "set:back" {
+		b.redrawSettings(ctx, cq)
+		return
+	}
+
+	var err error
+	switch {
+	case strings.HasPrefix(data, "set:time:"):
+		value := strings.TrimPrefix(data, "set:time:")
+		if _, parseErr := time.Parse("15:04", value); parseErr != nil {
+			err = parseErr
+		} else {
+			err = b.store.SetSubscriberDeliveryTime(ctx, chatID, value)
+		}
+	case strings.HasPrefix(data, "set:tz:"):
+		value := strings.TrimPrefix(data, "set:tz:")
+		if _, parseErr := time.LoadLocation(value); parseErr != nil {
+			err = parseErr
+		} else {
+			err = b.store.SetSubscriberTimezone(ctx, chatID, value)
+		}
+	case strings.HasPrefix(data, "set:top:"):
+		value := strings.TrimPrefix(data, "set:top:")
+		topN, parseErr := strconv.Atoi(value)
+		if parseErr != nil {
+			err = parseErr
+		} else {
+			err = b.store.SetSubscriberDigestTopN(ctx, chatID, topN)
+		}
+	case strings.HasPrefix(data, "set:format:"):
+		err = b.store.SetSubscriberDigestFormat(ctx, chatID, strings.TrimPrefix(data, "set:format:"))
+	case strings.HasPrefix(data, "set:weekends:"):
+		err = b.store.SetSubscriberQuietWeekends(ctx, chatID, strings.TrimPrefix(data, "set:weekends:") == "on")
+	case strings.HasPrefix(data, "set:lang:"):
+		err = b.store.SetSubscriberLanguage(ctx, chatID, strings.TrimPrefix(data, "set:lang:"))
+	}
+	if err != nil {
+		b.logger.Warn("bot: update settings failed",
+			slog.Int64("chat_id", chatID), slog.String("data", data), slog.String("error", err.Error()))
+		_, _ = b.api.Send(tgbotapi.NewCallback(cq.ID, "Не удалось сохранить"))
+		return
+	}
+
+	b.redrawSettings(ctx, cq)
+}
+
+func (b *Bot) redrawSettings(ctx context.Context, cq *tgbotapi.CallbackQuery) {
+	chatID := cq.Message.Chat.ID
+	st, err := b.store.GetSubscriberSettings(ctx, chatID)
+	if err != nil {
+		b.logger.Warn("bot: get settings failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+		_, _ = b.api.Send(tgbotapi.NewCallback(cq.ID, "Не удалось загрузить настройки"))
+		return
+	}
+	edit := tgbotapi.NewEditMessageTextAndMarkup(chatID, cq.Message.MessageID, settingsText(st), b.buildSettingsKeyboard(st))
+	if _, err := b.api.Send(edit); err != nil {
+		b.logger.Warn("bot: redraw settings failed",
+			slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+	}
 	_, _ = b.api.Send(tgbotapi.NewCallback(cq.ID, ""))
 }
 
@@ -762,22 +987,36 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 		return nil
 	}
 
+	recipients, err := b.store.GetActiveSubscriberSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("bot: get active subscribers: %w", err)
+	}
+	return b.BroadcastTo(ctx, items, date, recipients)
+}
+
+// BroadcastTo sends a digest to the provided subscribers using each chat's
+// personal language, category, top-N and format settings.
+func (b *Bot) BroadcastTo(ctx context.Context, items []models.RankedNewsItem, date time.Time, recipients []models.SubscriberSettings) error {
+	if len(items) == 0 || len(recipients) == 0 {
+		return nil
+	}
+
 	b.logger.Info("bot: broadcast starting",
 		slog.Int("items", len(items)),
 		slog.Time("date", date),
 	)
 
-	chatsByLang, err := b.store.GetActiveChatsByLanguage(ctx)
-	if err != nil {
-		return fmt.Errorf("bot: get active chats: %w", err)
+	settingsByLang := make(map[string][]models.SubscriberSettings)
+	for _, st := range recipients {
+		if st.Language == "" {
+			st.Language = "ru"
+		}
+		settingsByLang[st.Language] = append(settingsByLang[st.Language], st)
 	}
 
-	totalChats := 0
-	for _, ids := range chatsByLang {
-		totalChats += len(ids)
-	}
+	totalChats := len(recipients)
 	b.logger.Info("bot: broadcast subscribers",
-		slog.Int("subscribers", totalChats), slog.Int("languages", len(chatsByLang)))
+		slog.Int("subscribers", totalChats), slog.Int("languages", len(settingsByLang)))
 
 	if totalChats == 0 {
 		return nil
@@ -798,25 +1037,22 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 	sentCount := 0
 	skippedNoMatchCount := 0
 
-	for lang, chatIDs := range chatsByLang {
+	for lang, settings := range settingsByLang {
 		// Translate once per distinct language rather than per subscriber.
 		langItems := items
-		buildParts := func(filtered []models.RankedNewsItem) []string {
-			return b.formatter.DigestParts(filtered, date)
-		}
+		translatedHeader := ""
 		if !isDefaultLanguage(lang) {
-			translatedItems, translatedHeader := b.translateForLanguage(
+			translatedItems, header := b.translateForLanguage(
 				ctx, items, formatter.PlainDigestHeader(date, b.formatter.TopN()), lang)
 			langItems = translatedItems
-			buildParts = func(filtered []models.RankedNewsItem) []string {
-				return b.formatter.TopicDigestParts(translatedHeader, filtered)
-			}
+			translatedHeader = header
 		}
 
-		for _, chatID := range chatIDs {
+		for _, st := range settings {
 			wg.Add(1)
-			go func(id int64, langItems []models.RankedNewsItem, buildParts func([]models.RankedNewsItem) []string) {
+			go func(st models.SubscriberSettings, langItems []models.RankedNewsItem, translatedHeader string) {
 				defer wg.Done()
+				id := st.ChatID
 
 				// Acquire semaphore slot with ctx awareness.
 				select {
@@ -845,7 +1081,13 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 					)
 					return
 				}
-				parts := buildParts(filtered)
+				opts := formatter.DigestOptions{TopN: st.DigestTopN, Format: st.DigestFormat}
+				var parts []string
+				if translatedHeader != "" {
+					parts = b.formatter.TopicDigestPartsWithOptions(translatedHeader, filtered, opts)
+				} else {
+					parts = b.formatter.DigestPartsWithOptions(filtered, date, opts)
+				}
 
 				for _, part := range parts {
 					// Wait for a rate limiter token (globally serialises sends).
@@ -878,7 +1120,7 @@ func (b *Bot) Broadcast(ctx context.Context, items []models.RankedNewsItem, date
 					sentCount++
 					mu.Unlock()
 				}
-			}(chatID, langItems, buildParts)
+			}(st, langItems, translatedHeader)
 		}
 	}
 
