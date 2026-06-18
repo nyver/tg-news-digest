@@ -1224,6 +1224,15 @@ func (b *Bot) BroadcastTo(ctx context.Context, items []models.RankedNewsItem, da
 		slog.Int("failed", failedCount),
 		slog.Int("skipped_no_match", skippedNoMatchCount),
 	)
+	if err := b.store.SaveBroadcastStats(ctx, models.BroadcastStats{
+		RunAt:          time.Now(),
+		Recipients:     totalChats,
+		SentMessages:   sentCount,
+		FailedMessages: failedCount,
+		SkippedNoMatch: skippedNoMatchCount,
+	}); err != nil {
+		b.logger.Warn("bot: save broadcast stats failed", slog.String("error", err.Error()))
+	}
 
 	if failedCount > 0 {
 		b.logger.Warn("bot: broadcast completed with failures",

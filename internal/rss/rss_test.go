@@ -232,3 +232,28 @@ func TestFetchLocalFile_NotFound(t *testing.T) {
 	_, err = f.fetchSingle(ctx, "/no/such/path/feed.xml", time.Now().Add(-24*time.Hour))
 	assert.Error(t, err)
 }
+
+func TestFetchAll_RecordsRSSErrors(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.New(ctx, ":memory:")
+	require.NoError(t, err)
+	defer store.Close()
+
+	cfg := config.RSSConfig{
+		Feeds:           []string{"/no/such/path/feed.xml"},
+		MaxItemsPerFeed: 50,
+		FetchTimeout:    10 * time.Second,
+		CacheTTL:        24 * time.Hour,
+	}
+	f := New(cfg, store)
+
+	result, err := f.FetchAll(ctx, time.Now().Add(-24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.FeedsErr)
+
+	rssErrors, err := store.GetRecentRSSErrors(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, rssErrors, 1)
+	assert.Contains(t, rssErrors[0].FeedURL, "feed.xml")
+	assert.Contains(t, rssErrors[0].Error, "read local feed")
+}

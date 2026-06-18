@@ -32,7 +32,7 @@ Telegram-бот для ежедневного новостного дайдже�
 - **Дедупликация** — SHA256-хэширование (title|link) + TTL-кэширование в SQLite (WAL-режим)
 - **Автоочистка БД** — удаление записей истории дайджестов старше 30 дней и новостей старше `fetched_items_retention_days` (по умолчанию 3 дня)
 - **Отказоустойчивость** — fallback на raw top-N по дате при ошибке LLM, graceful shutdown, авто-отписка заблокированных
-- **Healthcheck** — HTTP endpoint для мониторинга БД, LLM и Telegram
+- **Healthcheck и dashboard** — HTTP endpoints для мониторинга БД, LLM, Telegram и read-only статистики бота
 - **Двойное логирование** — JSON в файл + текст в stdout
 
 ## 🏗 Структура проекта
@@ -274,6 +274,15 @@ export TG_NEWS_LLM_ENDPOINT="http://localhost:8080"
 ```bash
 curl http://localhost:9100/health
 ```
+
+Read-only dashboard:
+
+```bash
+open http://localhost:9100/dashboard
+curl http://localhost:9100/dashboard.json
+```
+
+Dashboard показывает источники RSS, последние ошибки RSS, последние дайджесты, количество подписчиков, статистику отправленных/упавших сообщений и популярные категории.
 
 Пример ответа:
 

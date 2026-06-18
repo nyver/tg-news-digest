@@ -424,6 +424,48 @@ func TestGetActiveChatsByLanguage(t *testing.T) {
 	assert.NotContains(t, groups["English"], int64(4))
 }
 
+func TestDashboardStats(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, s.SaveSubscriber(ctx, 1))
+	require.NoError(t, s.SaveSubscriber(ctx, 2))
+	require.NoError(t, s.Unsubscribe(ctx, 2))
+	require.NoError(t, s.AddSubscriberCategory(ctx, 1, "AI"))
+	require.NoError(t, s.AddSubscriberCategory(ctx, 2, "AI"))
+	require.NoError(t, s.AddSubscriberCategory(ctx, 1, "ML"))
+
+	active, total, err := s.CountSubscribers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, active)
+	assert.Equal(t, 2, total)
+
+	cats, err := s.GetPopularCategories(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, cats, 2)
+	assert.Equal(t, "AI", cats[0].Category)
+	assert.Equal(t, 2, cats[0].Count)
+
+	require.NoError(t, s.SaveRSSError(ctx, "https://example.com/feed.xml", "timeout"))
+	rssErrors, err := s.GetRecentRSSErrors(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, rssErrors, 1)
+	assert.Equal(t, "timeout", rssErrors[0].Error)
+
+	require.NoError(t, s.SaveBroadcastStats(ctx, models.BroadcastStats{
+		RunAt:          time.Now(),
+		Recipients:     2,
+		SentMessages:   1,
+		FailedMessages: 1,
+		SkippedNoMatch: 0,
+	}))
+	broadcasts, err := s.GetRecentBroadcastStats(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, broadcasts, 1)
+	assert.Equal(t, 1, broadcasts[0].SentMessages)
+	assert.Equal(t, 1, broadcasts[0].FailedMessages)
+}
+
 func TestSubscriberSettings_DefaultsAndSetters(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

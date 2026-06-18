@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nyver/tg-news-digest/internal/config"
+	"github.com/nyver/tg-news-digest/internal/models"
 	"github.com/nyver/tg-news-digest/internal/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,9 @@ func newTestChecker(t *testing.T, port int) (*Checker, *storage.Store) {
 	cfg := config.Config{
 		Bot: config.BotConfig{
 			Token: "123456:FAKE_TOKEN_FOR_TESTING",
+		},
+		RSS: config.RSSConfig{
+			Feeds: []string{"https://example.com/feed.xml"},
 		},
 		LLM: config.LLMConfig{
 			Provider: "llama-cpp",
@@ -266,6 +270,67 @@ func TestHandler_ContentTypeHeader(t *testing.T) {
 	checker.Handler().ServeHTTP(w, req)
 
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+}
+
+func TestDashboardJSONHandler(t *testing.T) {
+	checker, store := newTestChecker(t, 0)
+	ctx := context.Background()
+
+	require.NoError(t, store.SaveSubscriber(ctx, 1))
+	require.NoError(t, store.AddSubscriberCategory(ctx, 1, "AI"))
+	require.NoError(t, store.SaveRSSError(ctx, "https://example.com/feed.xml", "timeout"))
+	_, err := store.SaveDigestRun(ctx, models.DigestRun{
+		RunAt:     time.Now(),
+		Status:    "success",
+		Trigger:   "cron",
+		ItemCount: 3,
+		LLMUsed:   true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.SaveBroadcastStats(ctx, models.BroadcastStats{
+		RunAt:        time.Now(),
+		Recipients:   1,
+		SentMessages: 1,
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard.json", nil)
+	w := httptest.NewRecorder()
+	checker.DashboardJSONHandler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var data DashboardData
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&data))
+	assert.Equal(t, []string{"https://example.com/feed.xml"}, data.Sources)
+	assert.Equal(t, 1, data.Subscribers.Active)
+	require.Len(t, data.RecentRSSErrors, 1)
+	require.Len(t, data.RecentDigests, 1)
+	require.Len(t, data.RecentBroadcasts, 1)
+	require.Len(t, data.PopularCategories, 1)
+}
+
+func TestDashboardHandler_HTML(t *testing.T) {
+	checker, _ := newTestChecker(t, 0)
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	w := httptest.NewRecorder()
+	checker.DashboardHandler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+	assert.Contains(t, w.Body.String(), "TG News Digest Dashboard")
+	assert.Contains(t, w.Body.String(), "https://example.com/feed.xml")
+}
+
+func TestDashboard_MethodNotAllowed(t *testing.T) {
+	checker, _ := newTestChecker(t, 0)
+
+	req := httptest.NewRequest(http.MethodPost, "/dashboard.json", nil)
+	w := httptest.NewRecorder()
+	checker.DashboardJSONHandler().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
 func TestStartHTTPServer_StartsAndStops(t *testing.T) {

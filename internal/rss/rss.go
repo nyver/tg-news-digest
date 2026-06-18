@@ -78,6 +78,9 @@ func (f *Fetcher) FetchAll(ctx context.Context, since time.Time) (*FetchResult, 
 	for fr := range ch {
 		if fr.err != nil {
 			result.FeedsErr++
+			if f.store != nil {
+				_ = f.store.SaveRSSError(ctx, fr.url, fr.err.Error())
+			}
 			continue
 		}
 		result.FeedsOK++

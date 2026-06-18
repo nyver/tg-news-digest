@@ -94,6 +94,22 @@ func (s *Store) migrate(ctx context.Context) error {
 			llm_used BOOLEAN NOT NULL DEFAULT 0,
 			error_msg TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS rss_errors (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			feed_url TEXT NOT NULL,
+			error TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_rss_errors_created_at ON rss_errors(created_at)`,
+		`CREATE TABLE IF NOT EXISTS broadcast_stats (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			recipients INTEGER NOT NULL DEFAULT 0,
+			sent_messages INTEGER NOT NULL DEFAULT 0,
+			failed_messages INTEGER NOT NULL DEFAULT 0,
+			skipped_no_match INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_broadcast_stats_run_at ON broadcast_stats(run_at)`,
 	}
 
 	for _, q := range queries {
@@ -405,6 +421,40 @@ func (s *Store) GetActiveChats(ctx context.Context) ([]int64, error) {
 	return chats, rows.Err()
 }
 
+func (s *Store) CountSubscribers(ctx context.Context) (active, total int, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END), 0), COUNT(*) FROM subscribers`,
+	).Scan(&active, &total)
+	return active, total, err
+}
+
+func (s *Store) GetPopularCategories(ctx context.Context, limit int) ([]models.CategoryStat, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT category, COUNT(*) AS cnt
+		 FROM subscriber_categories
+		 GROUP BY lower(category)
+		 ORDER BY cnt DESC, category ASC
+		 LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []models.CategoryStat
+	for rows.Next() {
+		var st models.CategoryStat
+		if err := rows.Scan(&st.Category, &st.Count); err != nil {
+			return nil, err
+		}
+		stats = append(stats, st)
+	}
+	return stats, rows.Err()
+}
+
 // --- Subscriber category preference methods ---
 
 // AddSubscriberCategory marks a chat as interested in the given category.
@@ -672,4 +722,114 @@ func (s *Store) CleanupOldDigestRuns(ctx context.Context, olderThan time.Duratio
 	}
 	n, _ := res.RowsAffected()
 	return int(n), nil
+}
+
+func (s *Store) GetRecentDigestRuns(ctx context.Context, limit int) ([]models.DigestRun, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, run_at, status, item_count, llm_used, COALESCE(error_msg, ''), COALESCE(trigger, 'cron')
+		 FROM digest_runs ORDER BY id DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []models.DigestRun
+	for rows.Next() {
+		var run models.DigestRun
+		if err := rows.Scan(
+			&run.ID,
+			&run.RunAt,
+			&run.Status,
+			&run.ItemCount,
+			&run.LLMUsed,
+			&run.ErrorMsg,
+			&run.Trigger,
+		); err != nil {
+			return nil, err
+		}
+		run.RunAt = run.RunAt.UTC()
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
+func (s *Store) SaveRSSError(ctx context.Context, feedURL, errorMessage string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO rss_errors (feed_url, error, created_at) VALUES (?, ?, CURRENT_TIMESTAMP)`,
+		feedURL, errorMessage,
+	)
+	return err
+}
+
+func (s *Store) GetRecentRSSErrors(ctx context.Context, limit int) ([]models.RSSError, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, feed_url, error, created_at FROM rss_errors ORDER BY id DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var errors []models.RSSError
+	for rows.Next() {
+		var rssErr models.RSSError
+		if err := rows.Scan(&rssErr.ID, &rssErr.FeedURL, &rssErr.Error, &rssErr.CreatedAt); err != nil {
+			return nil, err
+		}
+		rssErr.CreatedAt = rssErr.CreatedAt.UTC()
+		errors = append(errors, rssErr)
+	}
+	return errors, rows.Err()
+}
+
+func (s *Store) SaveBroadcastStats(ctx context.Context, stats models.BroadcastStats) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO broadcast_stats (run_at, recipients, sent_messages, failed_messages, skipped_no_match)
+		 VALUES (?, ?, ?, ?, ?)`,
+		stats.RunAt.UTC().Format("2006-01-02 15:04:05"),
+		stats.Recipients,
+		stats.SentMessages,
+		stats.FailedMessages,
+		stats.SkippedNoMatch,
+	)
+	return err
+}
+
+func (s *Store) GetRecentBroadcastStats(ctx context.Context, limit int) ([]models.BroadcastStats, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, run_at, recipients, sent_messages, failed_messages, skipped_no_match
+		 FROM broadcast_stats ORDER BY id DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []models.BroadcastStats
+	for rows.Next() {
+		var stats models.BroadcastStats
+		if err := rows.Scan(
+			&stats.ID,
+			&stats.RunAt,
+			&stats.Recipients,
+			&stats.SentMessages,
+			&stats.FailedMessages,
+			&stats.SkippedNoMatch,
+		); err != nil {
+			return nil, err
+		}
+		stats.RunAt = stats.RunAt.UTC()
+		result = append(result, stats)
+	}
+	return result, rows.Err()
 }

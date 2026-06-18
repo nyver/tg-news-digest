@@ -52,3 +52,27 @@ type DigestRun struct {
 	LLMUsed   bool      `json:"llm_used"`
 	ErrorMsg  string    `json:"error_msg,omitempty"`
 }
+
+// RSSError records a failed RSS fetch for dashboard diagnostics.
+type RSSError struct {
+	ID        int       `json:"id"`
+	FeedURL   string    `json:"feed_url"`
+	Error     string    `json:"error"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// BroadcastStats records aggregate delivery counters for one broadcast.
+type BroadcastStats struct {
+	ID             int       `json:"id"`
+	RunAt          time.Time `json:"run_at"`
+	Recipients     int       `json:"recipients"`
+	SentMessages   int       `json:"sent_messages"`
+	FailedMessages int       `json:"failed_messages"`
+	SkippedNoMatch int       `json:"skipped_no_match"`
+}
+
+// CategoryStat is the number of subscribers that selected a category/topic.
+type CategoryStat struct {
+	Category string `json:"category"`
+	Count    int    `json:"count"`
+}
